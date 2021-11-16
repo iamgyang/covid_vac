@@ -36,16 +36,15 @@ input_dir <- paste0(root_dir, "input")
 output_dir <- paste0(root_dir, "output")
 code_dir <- paste0(root_dir, "code")
 raw_dir <- paste0(root_dir, "raw_data")
-
+chat_dir <- paste0("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input")
 setwd(raw_dir)
-
 
 # Packages ---------------------------------------------------------------
 {
   list.of.packages <- c(
     "base", "car", "cowplot", "dplyr", "ggplot2", "ggthemes", "graphics", "grDevices",
     "grid", "gridExtra", "gvlma", "h2o", "lubridate", "MASS", "readxl", "rio", "rms",
-    "rsample", "stats", "tidyr", "utils", "zoo", "xtable", "stargazer", "data.table",
+    "rsample", "tidyr", "utils", "zoo", "xtable", "stargazer", "data.table",
     "ggrepel", "foreign", "fst", "countrycode", "wbstats", "quantmod", "R.utils",
     "leaps", "bestglm", "dummies", "caret", "jtools", "huxtable", "haven", "ResourceSelection",
     "betareg", "quantreg", "margins", "plm", "collapse", "kableExtra", "tinytex",
@@ -102,6 +101,8 @@ whodf <- whodf %>%
   mutate(source = "WHO/UNICEF") %>% 
   as.data.frame() %>% 
   as.data.table()
+
+keep_iso3c <- unique(whodf[year == 2020 & coverage>0]$iso3c)
 
 # Flu doses per 1000 population (Palache 2015) -----------------------------------------------
 # https://www.sciencedirect.com/science/article/pii/S0264410X15012359?via%3Dihub
@@ -192,16 +193,61 @@ setnames(vac_sched, c('ISO_3_CODE', 'COUNTRYNAME', 'YEAR', 'DESCRIPTION'),
          c('iso3c', 'country', 'year', 'description'))
 
 # Population --------------------------------------------------------------
-
+setwd(raw_dir)
 pop <- readstata13::read.dta13(paste0(raw_dir, "/un_pop/un_pop_estimates_cleaned.dta")) %>% as.data.table()
 
+setwd(raw_dir)
+pop2 <- fread('un_pop/WPP2019_PopulationBySingleAgeSex_1950-2019.csv')
+pop3 <- fread('un_pop/WPP2019_PopulationBySingleAgeSex_2020-2100.csv')
+pop2 <- rbindlist(list(pop2, pop3)); pop3 <- NULL
+pop2 <- pop2[LocID<=894,.(country = Location, year = Time, 
+                          pop = PopTotal, age = AgeGrp, fem = PopFemale)]
+pop2[country == "Curaçao", country:="curacao"]
+pop2[country == "Réunion", country:="reunion"]
+pop2 <- pop2[country != "Channel Islands"]
+bridge <- unique(pop2[,.(country)])
+bridge[,iso3c:=name2code(country)]
+pop2 <- merge(pop2, bridge, by = "country", all.x = T)
+pop2[,country:=NULL]
+
+# checks for US
+pop2[,pop:=pop*1000]
+pop2[,fem:=fem*1000]
+waitifnot(sum(pop2[iso3c=="USA" & year == 2019]$pop)<=340*10^6)
+waitifnot(sum(pop2[iso3c=="USA" & year == 2019]$pop)>=320*10^6)
+
+# get variables for 
+# 1) girls <= 15 (HPV), 
+# 2) infants (1y.o) (most vaccines)
+# 3) adults 65+ (flu)
+# 4) adults < 60 (yellow fever)
+pop2[age<=15,pop_f_le15:=sum(fem, na.rm = T),by = .(iso3c, year)]
+pop2[age<=1,pop_t_le1:=sum(pop, na.rm = T),by = .(iso3c, year)]
+pop2[age>=65,pop_t_ge65:=sum(pop, na.rm = T),by = .(iso3c, year)]
+pop2[age<60,pop_t_l60:=sum(pop, na.rm = T),by = .(iso3c, year)]
+pop2 <- pop2[,.(
+  pop_f_le15 = mean(pop_f_le15, na.rm = T),
+  pop_t_le1 = mean(pop_t_le1, na.rm = T),
+  pop_t_ge65 = mean(pop_t_ge65, na.rm = T),
+  pop_t_l60 = mean(pop_t_l60, na.rm = T),
+  pop = sum(pop, na.rm = T)
+  ), by = .(iso3c, year)]
+waitifnot(sum(pop2[iso3c=="USA" & year == 2019]$pop)<=340*10^6)
+waitifnot(sum(pop2[iso3c=="USA" & year == 2019]$pop)>=320*10^6)
+
+# compare cleanings:
+pop <- merge(pop2, pop, by = c("iso3c", "year"), all = T)
+pop[,diff:=2*(pop-poptotal)/(pop + poptotal)]
+waitifnot(all(na.omit(pop$diff<0.000001)))
+pop[,c('pop', 'diff', 'country'):=NULL]
+pop <- pop[!is.na(iso3c)]
 
 # Bridge between diseases and vaccine names -------------------------------
 setwd(raw_dir)
 bridge <- readxl::read_xlsx("bridge_disease_vaccine2.xlsx", sheet = 1) %>% as.data.table()
 
 
-# WB income classifcation --------------------------------------
+# WB income classification --------------------------------------
 
 wb_income <- readstata13::read.dta13("historical_wb_income_classifications.dta") %>% dfdt()
 wb_income <- wb_income[year == 2021, .(iso3c, income)]
@@ -223,6 +269,53 @@ yf_iso3c <- yf_risk[yf_risk=="Yes"]$iso3c
 # Vaccine discovery -------------------------------------------------------
 
 vac_disc <-readxl::read_xlsx("bridge_disease_vaccine2.xlsx", sheet = 2) %>% dfdt()
+
+# Maddison (2020) ---------------------------------------------------
+
+# Maddison data on historical GDP per capita
+mad <- rio::import(paste0(raw_dir, "/gdppc/mpd2020.dta"))
+mad <- mad %>% rename(date = year, iso3c = countrycode) %>% as.data.table()
+mad <- mad[date!=1,.(iso3c, gdppc, year = date)] %>% na.omit()
+
+# Real GDP PPP (WDI) -------------------------------------------------
+
+unique_country_codes <- na.omit(unique(countrycode::codelist$iso3c))
+
+wdi_gdppc <- 
+  WDI(
+    indicator = c('wdi_gdppc' = 'NY.GDP.PCAP.PP.KD'),
+    start = 1960,
+    end = lubridate::year(Sys.Date()),
+    country = unique_country_codes
+  )
+wdi_gdppc <- wdi_gdppc %>% as.data.table()
+wdi_gdppc[,iso3c:=countrycode(iso2c, "iso2c", "iso3c")]
+wdi_gdppc <- wdi_gdppc[!is.na(iso3c)]
+wdi_gdppc[,`:=`(iso2c = NULL, country = NULL)]
+wdi_gdppc[,keeprow:=apply(.SD, 1, function(x) length(na.omit(x)))]
+wdi_gdppc <- wdi_gdppc[keeprow>2,] %>% as.data.table()
+wdi_gdppc[,keeprow:=NULL]
+wdi_gdppc <- wdi_gdppc %>% dplyr::select(year, iso3c, wdi_gdppc) %>% dfdt
+
+# merge WDI and Maddison GDP PPP estimates -------------------------
+
+mad <- merge(mad, wdi_gdppc, by = c('year','iso3c'), all = TRUE)
+# confirm we have unique iso3c dates
+waitifnot(nrow(distinct(mad[,.(year, iso3c)]))==nrow(mad[,.(year, iso3c)]))
+
+# get GDP figures by using growth from WDI figures to 
+# project forwards the Maddison GDP figures.
+mad <- mad[order(iso3c,year)]
+mad[,wdi_gdppc_gr:=wdi_gdppc/shift(wdi_gdppc), by = 'iso3c']
+
+for (i in seq(2015, 2021)) {
+  mad[, gdppc.n := shift(gdppc) * wdi_gdppc_gr, by = 'iso3c']
+  mad[year == i & is.na(gdppc), gdppc := gdppc.n]
+  mad <- as.data.table(mad)
+}
+
+mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n')):=NULL]
+mad <- mad[order(iso3c, year)]
 
 # Merge -------------------------------------------------------
 
@@ -262,6 +355,9 @@ df <- merge(df, wb_income, by = c("iso3c"), all.x = T) %>% dfdt()
 
 # Vaccine discovery
 df <- merge(df, vac_disc, by = c("disease"), all.x = T) %>% dfdt()
+
+# Merge in GDP
+df <- merge(df, mad, by = c("iso3c", "year"), all.x = T) %>% dfdt()
 
 # Adjustments -------------------------------------------------------------
 
@@ -309,7 +405,8 @@ df <- df[, .(coverage = max(coverage, na.rm = T)),
            "yf_risk",
            "emerged",
            "microbe_id",
-           "licensing"
+           "licensing",
+           "gdppc"
          )]
 df <- df[!is.na(disease)]
 
@@ -330,7 +427,7 @@ df <- df %>% as.data.frame() %>% dfcoalesce.all() %>% as.data.table()
 df[, yr_sched:=mean(yr_sched, na.rm = T), by = .(iso3c, disease)]
 
 # of those countries past the scheduled license date AND, get the total population
-df <- df[(!(year<yr_sched) | is.na(yr_sched) | is.na(year))]
+df <- df[(!(year<yr_sched) | is.na(yr_sched) | is.na(year) | disease == "polio" | disease == "pertussis")]
 
 # for yellow fever, we want to ignore the countries that are not endemic with yellow fever
 df <- rbindlist(
@@ -342,7 +439,42 @@ df <- rbindlist(
 check_dup_id(df, c("iso3c","year", "disease"))
 df[,glob_pop:=sum(na.omit(poptotal), na.rm = T), by = .(year, disease)]
 df[,perc_pop:=poptotal/glob_pop]
-df <- df[!is.na(coverage)]
+df[is.na(coverage), coverage:=0]
+
+# *****PORT OVER TO CHAT******* ----------------------------------------
+
+custom_title <- function(x) {
+  if (toupper(x) == x ) {x
+  } else {
+    str_to_title(x)
+  }
+}
+setwd(input_dir)
+save.image("input_dir.RData")
+
+port_chat <-
+  df[, .(
+    iso3c,
+    date = year,
+    variable = disease,
+    value = coverage,
+    check.count = 1,
+    categ = c("Vaccine--Covid Paper"),
+    label = lapply(disease, custom_title),
+    pop = poptotal,
+    pop_f_le15, 
+    pop_t_le1, 
+    pop_t_ge65, 
+    pop_t_l60,
+    gdppc
+  )] %>% dfdt()
+
+setwd(chat_dir)
+TAKE_ME_BACK_DIR <- input_dir
+rm(list=setdiff(ls(), c("port_chat", "TAKE_ME_BACK_DIR", "pop")))
+save.image("port_CHAT.RData")
+setwd(TAKE_ME_BACK_DIR)
+load("input_dir.RData")
 
 # Table: above 75% coverage -----------------------------------------------
 
@@ -398,12 +530,6 @@ prog_df <-
         all = T) %>% dfdt()
 
 # make the disease names pretty
-custom_title <- function(x) {
-  if (toupper(x) == x ) {x
-    } else {
-    str_to_title(x)
-  }
-}
 prog_df$Disease <- prog_df$Disease %>% lapply(., custom_title)
 
 # Export to google sheets for Data Wrapper:
@@ -468,35 +594,66 @@ write_sheet(df_income_disease, ss = "https://docs.google.com/spreadsheets/d/1cRY
 
 
 
+# Check WHO ---------------------------------------------------------------
 
+# compare with our data:
+load("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input/index_convergence.RData")
 
+setwd(paste0(raw_dir, "/who_check"))
 
+dli <- dir()
+dli <- lapply(dli, read_xlsx)
+dli <- rbindlist(dli, fill = T)
+check_dup_id(dli, c("YEAR", "ANTIGEN", "COVERAGE"))
+dli <- dli[,.(year = YEAR, 
+              antigen = ANTIGEN, 
+              desc = ANTIGEN_DESCRIPTION, 
+              coverage = COVERAGE)]
 
+fix_countries <- setDT(fix_countries)[,
+                      .(label, year, meanval = w.meanval)][order(label)]
 
-# TO DO:
-# recycle CHAT comin code to get coefficient of variation
-# merge in GDP information for preston curves.
+temp_bridge <- fread("desc	label
+BCG	
+DTP-containing vaccine, 3rd dose	Diptheria
+DTP-containing vaccine, 3rd dose	Tetanus
+DTP-containing vaccine, 3rd dose	Pertussis
+Hib3	Hib
+HepB3	Hepb
+HPV VACCINATION PROGRAM COVERAGE - FIRST DOSE - FEMALES Target population who received the first dose of HPV vaccine in the reporting year	HPV
+HPV Vaccination coverage by age 15, complete schedule, females	HPV
+Measles-containing vaccine, 2nd dose	Measles
+Pneumococcal conjugate vaccine, final dose	Pneumococcal
+Inactivated polio-containing vaccine, 1st dose	
+Polio, 3rd dose	Polio
+Protection at birth (PAB) against neonatal tetanus	Tetanus
+Rotavirus, last dose	Rotavirus
+Rubella-containing vaccine, 1st dose	Rubella
+Yellow fever vaccine	
+")
 
+dli <- merge(dli, temp_bridge, by = "desc", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all()
+fix_countries <- merge(fix_countries, temp_bridge, by = "label", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
+check <- merge(fix_countries, dli, by = c("desc", "label", "year"))
+plot <- ggplot(check,
+       aes(
+         x = coverage,
+         y = meanval,
+         color = label,
+         group = label,
+         label = year
+       )) + geom_point() +
+  labs(x = "WHO", y = "Our Estimate", title = "Global Estimates of Vaccine Coverage") +
+  my_custom_theme +
+  geom_abline(intercept = 0,
+              slope = 1,
+              size = 0.5) + 
+  coord_cartesian(ylim = c(0, 100), xlim = c(0, 100)) + 
+  geom_text_repel(show.legend = FALSE) + 
+  scale_color_custom
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+setwd(input_dir)
+ggsave("global_estimates_comparison2.pdf", plot)
 
 
 
