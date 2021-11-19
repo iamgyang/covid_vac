@@ -316,47 +316,58 @@ df_covid <- df_covid[,.(coverage = max(na.omit(cov), na.rm = T)),
 df_covid <- df_covid[!grepl("OWID", df_covid$iso3c),]
 df_covid[,vaccine:="Covid"]
 
-# Real GDP PPP (WDI) -------------------------------------------------
 
-unique_country_codes <- na.omit(unique(countrycode::codelist$iso3c))
+# GDP per capita from WEO -------------------------------------------------
 
-wdi_gdppc <- 
-  WDI(
-    indicator = c('wdi_gdppc' = 'NY.GDP.PCAP.PP.KD'),
-    start = 1960,
-    end = lubridate::year(Sys.Date()),
-    country = unique_country_codes
-  )
-wdi_gdppc <- wdi_gdppc %>% as.data.table()
-wdi_gdppc[,iso3c:=countrycode(iso2c, "iso2c", "iso3c")]
-wdi_gdppc <- wdi_gdppc[!is.na(iso3c)]
-wdi_gdppc[,`:=`(iso2c = NULL, country = NULL)]
-wdi_gdppc[,keeprow:=apply(.SD, 1, function(x) length(na.omit(x)))]
-wdi_gdppc <- wdi_gdppc[keeprow>2,] %>% as.data.table()
-wdi_gdppc[,keeprow:=NULL]
-wdi_gdppc <- wdi_gdppc %>% dplyr::select(year, iso3c, wdi_gdppc) %>% dfdt
+# we get constant PPP GDP per capita from WEO's October 2021 release.
+weo_oct_21 <- fread("WEOOct2021all.txt")
+
+weo_oct_21 <-
+  weo_oct_21[`Subject Descriptor` ==
+               "Gross domestic product per capita, constant prices"&
+               Units == "Purchasing power parity; 2017 international dollar"]
+weo_oct_21 <- as.data.frame(weo_oct_21)
+weo_oct_21 <-
+  weo_oct_21[, c("ISO", "Country", as.character(seq(1980, 2021)))]
+weo_oct_21 <- weo_oct_21 %>%
+  pivot_longer(., as.character(seq(1980, 2021)),
+               names_to = "year")
+weo_oct_21$value <- as.numeric(gsub(",", "", weo_oct_21$value))
+weo_oct_21$year <- as.numeric(weo_oct_21$year)
+
+weo_oct_21 <- weo_oct_21 %>% 
+  rename(iso3c = ISO) %>% 
+  dplyr::select(iso3c, year, value) %>% 
+  rename(weo_gdppc = value) %>% 
+  na.omit() %>% 
+  dfdt()
+
+waitifnot(nrow(weo_oct_21)>0)
 
 # merge WDI and Maddison GDP PPP estimates -------------------------
 
-mad <- merge(mad, wdi_gdppc, by = c('year','iso3c'), all = TRUE)
-# confirm we have unique iso3c dates
+mad <- merge(mad, weo_oct_21,by = c('year','iso3c'), all = TRUE)
+
+# confirm we have unique iso3c years
 waitifnot(nrow(distinct(mad[,.(year, iso3c)]))==nrow(mad[,.(year, iso3c)]))
 
-# get GDP figures by using growth from WDI figures to 
+# Get 2019 and 2021 GDP figures by using growth from WEO figures to 
 # project forwards the Maddison GDP figures.
 mad <- mad[order(iso3c,year)]
-mad[,wdi_gdppc_gr:=wdi_gdppc/shift(wdi_gdppc), by = 'iso3c']
+mad[,weo_gdppc_gr:=weo_gdppc/shift(weo_gdppc), by = 'iso3c']
 
 for (i in seq(2015, 2021)) {
-  mad[, gdppc.n := shift(gdppc) * wdi_gdppc_gr, by = 'iso3c']
+  mad[, gdppc.n := shift(gdppc) * weo_gdppc_gr, by = 'iso3c']
   mad[year == i & is.na(gdppc), gdppc := gdppc.n]
   mad <- as.data.table(mad)
 }
 
-mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n')):=NULL]
+waitifnot((mad[iso3c == "USA"][year == 2021]$gdppc>0)==TRUE)
+
+mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n', 
+        'weo_gdppc', 'weo_gdppc_gr')):=NULL]
 mad <- mad[order(iso3c, year)]
 
-setwd(input_dir)
 save.image("pre_merge.RData")
 # Merge -------------------------------------------------------
 load("pre_merge.RData")
@@ -486,6 +497,9 @@ df <- rbindlist(
 check_dup_id(df, c("iso3c","year", "disease"))
 df[,glob_pop:=sum(na.omit(poptotal), na.rm = T), by = .(year, disease)]
 df[,perc_pop:=poptotal/glob_pop]
+
+save.image("prior to replacing w zero.RData")
+load("prior to replacing w zero.RData")
 
 # IF THE COVERAGE IS MISSING, REPLACE WITH 0! (checked that this is what WHO
 # does with their data when estimating coverage)
@@ -643,9 +657,6 @@ df_income_disease <- df_income_disease %>% na.omit() %>%
 df_income_disease$disease <- df_income_disease$disease %>% lapply(., custom_title)
 
 write_sheet(df_income_disease, ss = "https://docs.google.com/spreadsheets/d/1cRYaM8cKGcFVTbCtvxttjOXpkH4iPLim2aYIYLdkSPw/edit?usp=sharing", sheet = 1)
-
-
-
 
 # Line: UK/Developing World across time ----------------------------
 
