@@ -1,107 +1,4 @@
-# curve 1: coefficient of variation ---------------------------------------
-
-load("table_aesthetic.RData")
-
-df.toplot <- 
-chatting$Yes %>%
-  as.data.frame() %>%
-  filter(Category == "Vaccine--Covid Paper") %>% 
-  dplyr::select(
-    `Technology (with date)`,
-    Category,
-    `Coefficient of variation of the value at the start`,
-    `Coefficient of variation of the value at the end`
-  ) %>%
-  gather(
-    .,
-    "Period",
-    "Coefficient of Variation",
-    `Coefficient of variation of the value at the start`:`Coefficient of variation of the value at the end`
-  ) %>%
-  mutate(
-    Period = 
-      Period %>% 
-           gsub("Coefficient of variation of the value at the ", "", .) %>% 
-           factor(., levels = c("start", "end"))
-         ) %>% 
-  filter(`Technology (with date)` %>% grepl("Smallpox",., ignore.case = T)==FALSE) %>% 
-  as.data.table()
-
-df.toplot$Category %>% unique()
-
-# Agricultural Technologies
-# Communications technologies
-# Drug/vaccine technologies
-# Manufacturing technologies
-# Other
-# Transport technologies
-
-plot <-
-  ggplot(
-    df.toplot,
-    aes(
-      x = Period,
-      y = `Coefficient of Variation`,
-      group = `Technology (with date)`,
-      color = `Category`
-    )
-  ) + geom_line() +
-  labs(x = "", y = "",
-       subtitle = "Coefficient of Variation (Log Scale)") +
-  # geom_text_repel(
-  #   data = df.toplot[Period == "end" &
-  #                      (
-  #                        Category == "Transport technologies" |
-  #                          Category == "Communications technologies" |
-  #                          Category == "Drug/vaccine technologies"
-  #                      )],
-  #   aes(
-  #     x = Period,
-  #     y = `Coefficient of Variation`,
-  #     label = `Technology (with date)`,
-  #     hjust = -0.1
-  #   ),
-  #   direction = "y",
-  #   segment.colour = "grey85",
-  #   segment.size = 0,
-  #   show.legend = FALSE
-  # ) +
-  geom_text_repel(
-    data = df.toplot[Period == "end" &
-                       !(
-                         Category == "Transport technologies" |
-                           Category == "Communications technologies" |
-                           Category == "Drug/vaccine technologies"
-                       )],
-    aes(
-      x = Period,
-      y = `Coefficient of Variation`,
-      label = `Technology (with date)`,
-      hjust = 1.1
-    ),
-    direction = "y",
-    segment.colour = "grey85",
-    segment.size = 0,
-    show.legend = FALSE
-  ) +
-  scale_color_custom + 
-  geom_point(show.legend = FALSE) +
-  guides(colour = guide_legend(override.aes = list(size = 3))) +
-  my_custom_theme +
-  scale_y_log10() + 
-  theme(legend.position = "none")
-
-ggsave(
-  paste0("point_start_end_coef_variation.pdf"),
-  plot,
-  width = 10,
-  height = 14,
-  limitsize = FALSE#,
-  #dpi = 1000
-)
-
-
-# curve 2: preston curve ----------------------------------
+# curve 1: preston curve ----------------------------------
 load("table_aesthetic.RData")
 start.end.dates <-
   as.data.table(chatting$Yes[, .(`Technology (with date)`,
@@ -217,7 +114,7 @@ ggsave(
 )
 
 
-# curve 3: coefficient of variation across time -----------------------
+# curve 2: coefficient of variation across time -----------------------
 
 # get the start and final dates from the other table
 load("table_aesthetic.RData")
@@ -319,7 +216,7 @@ ggsave(
   height = 7
 )
 
-# curve 4: means and stdevs ----------------------------------------
+# curve 3: means and stdevs ----------------------------------------
 
 # plot means and standard deviations across time for variable in each 
 # category with the longest time series:
