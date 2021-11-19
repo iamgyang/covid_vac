@@ -92,3 +92,6 @@ source(paste0("C:/Users/", user, "/Dropbox/Coding_General/personal.functions.R")
 # # For a view on the overlapping list of data variables, their sources, start dates, see Table _____ below.
 # # A full list of data variables, their sources, start dates, can be seen in Table _____ below.
 # # 
+
+
+cat("\014")
