@@ -53,6 +53,10 @@ chatting[percentile > .4 & percentile <= .6, quantile := 3]
 chatting[percentile > .6 & percentile <= .8, quantile := 4]
 chatting[percentile > .8 & percentile <= 1, quantile := 5]
 
+# keep only the countries where WHO has a value in 2020:
+chatting <- chatting[iso3c%in%(port_chat$iso3c %>% unique())]
+
+# restrict to above 20% coverage:
 income.check <- chatting[, .(
     q1 = sum(quantile == 1, na.rm = T),
     q2 = sum(quantile == 2, na.rm = T),
@@ -64,6 +68,14 @@ income.check <- chatting[, .(
 ),
 by = .(date, variable, label)]
 
+income.check <- merge(income.check, df_disease_avg, 
+      by.x = c("date", "variable"),
+      by.y = c("year","disease"), all.x = T)
+
+income.check <- 
+  income.check[coverage>=20 | variable == "influenza" | variable == "HPV" | 
+                 variable == "covid-19"]
+
 # For each technology, make sure that they have
 # 1) start and end date have a sample of ___ countries
 # 2) at least one date that is prior to 1990 and that
@@ -73,7 +85,6 @@ by = .(date, variable, label)]
 # 1) start and end date have a sample of ____ countries
 # (use ___ as a buffer because some get ommited. Then, at the end,
 # we re-filter for ___ countries).
-income.check <- income.check[num.countries >= 10]
 
 # Some technologies have this issue where they have fewer countries in recent
 # years. So, delete those recent years where there is a rapid drop in the
@@ -96,17 +107,12 @@ income.check[is.na(per.diff.num.coun.vs.3.MA),per.diff.num.coun.vs.3.MA:=0]
 income.check <- income.check[!(per.diff.num.coun.vs.3.MA < (-0.3)) | 
                                is.na(per.diff.num.coun.vs.3.MA),]
 
-# 4) at least 2 countries within the poorest 2 quintiles
-income.check <- income.check[q1>=0 & q2>=0,]
-
 # 2) at least one date that is prior to 1990 and that
 # 3) the time from START to END is 20 years
 # Okay, so the START date might include variables where everything is zero.
 # So, re-define the start date to be variables where everything is not zero.
-income.check[all.zero == FALSE, start.date := min(date, na.rm = T), by = "variable"]
+income.check[, start.date := min(date, na.rm = T), by = "variable"]
 income.check[all.zero == FALSE, end.date := max(date, na.rm = T), by = "variable"]
-income.check[, diff.date := abs(start.date - end.date)]
-income.check <- income.check[start.date <= 9999999999999 & diff.date >= 4, ]
 
 # keep the data where there the date is equal to either the start or end date:
 income.check <- income.check[(start.date == date) | (end.date == date)]
@@ -120,14 +126,15 @@ income.check[, count := 1]
 income.check[, count := sum(count), by = variable]
 income.check <- income.check[count==2]
 
-# Check: make sure that we kept the internet user variable (we know this one
-# has good coverage):
-waitifnot(any((income.check$label %>% unique)=="People with internet access"))
-
 chatting <- merge(chatting, income.check, by = c("date","variable", "label"), all.x = T)
 chatting <- chatting[count==2]
 chatting[,count:=NULL]
 chatting[,variable:=variable %>% as.character()]
+
+# check that we still have HPV and flu
+waitifnot(any(chatting$variable=="HPV")==TRUE)
+waitifnot(any(chatting$variable=="influenza")==TRUE)
+waitifnot(any(chatting$variable=="covid-19")==TRUE)
 
 # Convert Agricultural Variables to 'per-AREA' ----------------------------
 # (will need to add into the percent variable and any manually coded later
@@ -476,9 +483,6 @@ chatting <- chatting %>%
 chatting %>% write.csv("Table 1.csv", na = "", row.names = FALSE)
 
 chatting <- split(chatting, chatting$`Is this a technology variable?`)
-
-write.xlsx(chatting$Yes, file="filename.xlsx", sheetName="Technology Variables", row.names=FALSE)
-write.xlsx(chatting$No, file="filename.xlsx", sheetName="Non-Technology Variables", append = TRUE, row.names=FALSE)
 
 save.image("table_aesthetic.RData")
 load("table_aesthetic.RData")
