@@ -88,7 +88,8 @@ plot <-
   geom_point(show.legend = FALSE) +
   guides(colour = guide_legend(override.aes = list(size = 3))) +
   my_custom_theme +
-  scale_y_log10()
+  scale_y_log10() + 
+  theme(legend.position = "none")
 
 ggsave(
   paste0("point_start_end_coef_variation.png"),
@@ -103,15 +104,26 @@ ggsave(
 # curve 2: preston curve ----------------------------------
 load("table_aesthetic.RData")
 start.end.dates <-
-  as.data.table(chatting$Yes[,.(`Technology (with date)`,
-                Variable,
-                `Start Date`,
-                `End Date`)])
+  as.data.table(chatting$Yes[, .(`Technology (with date)`,
+                                 Variable,
+                                 `Start Date`,
+                                 `End Date`)])
 load("restrict_sample.RData")
-df.toplot <- 
-  chatting[,.(iso3c, gdppc, date, value, 
-              variable, start.date, end.date, categ)]
-df.toplot <- df.toplot[categ=="Vaccine--Covid Paper"]
+df.toplot <-
+  chatting[, .(iso3c, gdppc, date, value,
+               variable, start.date, end.date, categ)]
+df.toplot <- df.toplot[categ == "Vaccine--Covid Paper"]
+
+# for Preston curves, we do not want to plot HPV, Smallpox, or Flu:
+df.toplot <- df.toplot %>%
+  filter(
+    variable != "Smallpox" &
+      # Didn't want flu or HPV because we never reached 20%
+      # global coverage.
+      variable != "influenza" &
+      variable != "HPV"
+  ) %>%
+  dfdt()
 
 # check that start and end dates align
 start.end.dates[, `Technology (with date)` :=
@@ -137,66 +149,75 @@ df.toplot <-
     period = gsub(" Date", "", period)
   ) %>% 
   filter(date == date_start_end) %>% 
-  filter(`Technology (with date)`!="Smallpox") %>% 
   as.data.table() 
-  
-for (tec in unique(df.toplot$`Technology (with date)`)) {
-  plot <- 
-    ggplot(df.toplot[`Technology (with date)` == tec], 
-    aes(x = gdppc, 
-        y = value, 
-        color = as.factor(date_start_end), 
-        group = as.factor(date_start_end))) + 
-    geom_point() + 
-    geom_smooth(
-      se = FALSE,
-      size = 0.4,
-      method = "lm",
-      formula = (y~x),
-      aes(
-        x = gdppc,
-        y = value,
-        group = as.factor(date_start_end),
-        color = as.factor(date_start_end)
-      )
-    ) + 
-    annotation_logticks(sides = "b") +
-    scale_x_continuous(labels=scales::dollar_format(), trans = "log10") + 
-    my_custom_theme + 
-    labs(y = "", subtitle = tec)+
-    scale_color_custom + 
-    guides(colour = guide_legend(override.aes = list(size = 3)))
-  
-  ggsave(
-    paste0("point_preston_poly2", make.names(cleanname(tec)),".png"),
-    plot,
-    width = 10,
-    height = 14,
-    limitsize = FALSE,
-    dpi = 400
-  )
-  
-}
+
+df.toplot$`Technology (with date)` %>% 
+  unique() %>% 
+  grepl("smallpox|hpv|influenza", ., ignore.case = T) %>% 
+  (function(x) {x==FALSE}) %>% 
+  all() %>% 
+  waitifnot()
+
+# filter so that 2020/2021 is not 0:
+df_fil <- 
+  df.toplot %>% 
+  dplyr::select(-c(period, date_start_end, gdppc))%>% 
+  pivot_wider(names_from = date, values_from = value) %>% 
+  filter(`2020`!=0 & `2021`!=0) %>% 
+  dplyr::select(`Technology (with date)`, iso3c) %>% 
+  mutate(keep = 1) %>% 
+  dfdt()
+check_dup_id(df_fil, c("Technology (with date)", "iso3c"))
+
+df.toplot <- merge(df.toplot, df_fil, all.x = T)
+df.toplot <- df.toplot %>% filter(keep == 1)
+
+plot <- 
+  ggplot(df.toplot, 
+  aes(x = gdppc, 
+      y = value, 
+      color = as.factor(date_start_end), 
+      group = as.factor(date_start_end))) + 
+  geom_point(show.legend = FALSE) + 
+  geom_smooth(
+    se = FALSE,
+    size = 0.4,
+    method = "lm",
+    formula = (y~x),
+    aes(
+      x = gdppc,
+      y = value,
+      group = as.factor(date_start_end),
+      color = as.factor(date_start_end)
+    )
+  ) + 
+  annotation_logticks(sides = "b") +
+  scale_x_continuous(labels=scales::dollar_format(), trans = "log10") + 
+  my_custom_theme + 
+  labs(y = "Coverage (%)", subtitle = "", x = "GDP per capita (Log Scale)")+
+  scale_color_custom + 
+  guides(colour = guide_legend(override.aes = list(size = 3))) + 
+  facet_wrap(~`Technology (with date)`) + 
+  scale_y_continuous(breaks = seq(0,100,20))
+
+ggsave(
+  paste0("point_preston_linear.png"),
+  plot,
+  width = 10,
+  height = 14,
+  limitsize = FALSE,
+  dpi = 400
+)
 
 
-# curve 3: index of yes/no convergence across time ---------------------------------
-
-# get the population data from beginning data cleaning:
-load("merged1.RData")
-land_and_pop <- 
-  m.alldf[,.(pop, iso3c, date, land = `Land Arable land Area 1000 ha`)]
-
-# get disease-specific population data here:
-load("port_CHAT.RData")
-pop_disease <- pop[,.(iso3c, year, pop, pop_f_le15, pop_t_le1, pop_t_ge65, pop_t_l60)]
-pop_disease <- unique(pop_disease)
+# curve 3: index of yes/no convergence across time -----------------------
 
 # get the start and final dates from the other table
 load("table_aesthetic.RData")
 start.end <- chatting$Yes[, .(Variable, `Start Date`, `End Date`, Label)]
 
 load("relabel_variable_names.RData")
-chatting <- chatting[date %in% seq(1950, 2019, 5)]
+chatting <- chatting[date %in% seq(1951, 2021, 1)]
 chatting <- 
   merge(chatting, start.end, 
         by.x = c('variable'), 
@@ -204,59 +225,10 @@ chatting <-
         allow.cartesian = FALSE,
         all.x = TRUE)
 
-# make all variables per capita
-chatting$label <- NULL
-chatting[Label %in% percent.labels, pop := 1]
-chatting[, value := value / pop]
-
 # narrow down to a fixed sample of countries (those present in every year)
 chatting <- chatting %>% filter(!is.na(`Start Date`))
-fix_countries <- chatting %>% split.data.frame(chatting$Label)
-fix_countries <- lapply(fix_countries,
-                        function(x)
-                        {
-                          x <- x %>%
-                            filter(!is.na(value)) %>%
-                            dplyr::select(iso3c, value, date, categ)
-
-                          # If for 1 date / year, we just have a paucity of
-                          # country coverage, then we exclude it. We do this
-                          # by getting the number of countries per date
-                          # (5 years). And then, if one of those dates has
-                          # less than 50 the count of countries at the
-                          # maximum date, that date is excluded.
-                          counts_date <- as.numeric(table(x$date))
-                          max_count <- max(counts_date)
-                          exclude_date <-
-                            as.numeric(
-                              names(table(x$date)[counts_date < max_count - 50]))
-
-                          x <- x %>%
-                            filter(!(date %in% exclude_date)) %>%
-                            spread(date, value) %>%
-                            na.omit() %>%
-                            gather(., "year", "value", !c("iso3c", "categ"))
-                        })
-fix_countries <- rbindlist(fix_countries, id = "label")
 fix_countries <- chatting %>% dfdt()
-
-# merge back in population (will need for weighted coefficient of variation)
-fix_countries <- merge(
-  fix_countries[,.(label = Label,iso3c,categ,value,
-                   year = as.numeric(date))], 
-                   land_and_pop[, .(year = date,
-                                        iso3c, 
-                                        pop, 
-                                        land)],
-      by = c("iso3c", "year"),
-      all.x = TRUE)
-
-fix_countries <- merge(
-  fix_countries,
-  pop_disease,
-  by = c('iso3c','year'),
-  all.x = TRUE
-)
+chatting <- NULL
 
 # weighted standard deviation function:
 w.sd <- function(x, wt) {sqrt(wtd.var(x, wt))}
@@ -278,28 +250,28 @@ fix_countries <- fix_countries[categ=="Vaccine--Covid Paper"]
 # and a weighted coefficient of variation. NOTE: weighted coefficient of variation may have FEWER countries than the standard coefficient of variation due to lack of data for population or land IF the variable was a percent variable.
 
 # base our population variable on the population of the target population
+fix_countries[,poptotal:=pop]
 fix_countries[label == "Influenza", pop := pop_t_ge65]
 fix_countries[label == "HPV", pop := pop_f_le15]
 fix_countries[label == "Yellow Fever", pop := pop_t_l60]
 fix_countries[label != "Influenza" & 
               label != "HPV" & 
               label != "Yellow Fever", pop := pop_t_le1]
+fix_countries[label == "Covid-19", pop := poptotal]
 
 waitifnot(all(unlist(fix_countries[!(label%in%percent.labels),.(is.na(pop))])==FALSE))
 
+fix_countries <- fix_countries %>% rename(year = date) %>% dfdt()
+fix_countries[label == "Covid-19" & year == 2021] %>% 
+  write.csv("check.covid.csv", na = "", row.names = FALSE)
 fix_countries <- fix_countries[, .(meanval = mean(value, na.rm = T),
             stdev = sd(value, na.rm = T),
             w.meanval = weighted_mean(value, pop, na.rm = TRUE),
-            w.stdev = w.sd(value, pop),
-            w.ag.meanval = weighted_mean(value, land, na.rm = TRUE),
-            w.ag.stdev = w.sd(value, land)
+            w.stdev = w.sd(value, pop)
             ), 
             by = c("label", "year", "categ")]
-fix_countries[, w.ag.coef.var := w.ag.meanval / w.ag.stdev]
 fix_countries[, coef.var := stdev / meanval]
 fix_countries[, w.coef.var := w.stdev / w.meanval]
-fix_countries[categ == "Agricultural Technologies", w.coef.var := w.ag.coef.var]
-fix_countries$w.ag.coef.var <- NULL
 
 # we drop smallpox because data is too patchy:
 fix_countries <- fix_countries[label!="Smallpox"]
@@ -318,7 +290,7 @@ plot <-
                group = label, color = label)) +
   geom_line() +
   geom_point(show.legend = FALSE) +
-  scale_x_continuous(breaks = seq(1950, 2020, 10)) +
+  scale_x_continuous(breaks = seq(1980, 2020, 10)) +
   scale_fill_stata() +
   my_custom_theme +
   labs(
@@ -349,10 +321,24 @@ load("index_convergence.RData")
 # restrict to be all from 0-100 on y axis and 1980-2020 on x axis:
 
 ggplot_restrictions <- 
-       list(coord_cartesian(ylim = c(0, 100), xlim = c(1980, 2020)))
+       list(coord_cartesian(ylim = c(0, 100), xlim = c(1980, 2021)))
 
 toloop <- unique(fix_countries$label)
 toloop <- setdiff(toloop, "Smallpox")
+
+# for diseases NOT COVID, delete 2021 data because it's so patchy:
+fix_countries[year%in%c(2021) & label != "Covid-19", meanval:=NA]
+fix_countries[year%in%c(2021) & label != "Covid-19", stdev:=NA]
+fix_countries[year%in%c(2021) & label != "Covid-19", w.stdev:=NA]
+fix_countries[year%in%c(2021) & label != "Covid-19", w.meanval:=NA]
+
+# For flu and HPV, delete 2020 data because it's so patchy:
+# As of 11-18-2021, there are only 9 countries that we have flu data for,
+# and only 44 countries that we have HPV for in 2020 (compared to 22 and 54
+# for 2019, respectively).
+fix_countries[year%in%c(2020) & label %in% c("Influenza", "HPV"), 
+          (c("meanval", "stdev", "w.stdev", "w.meanval")):=NA]
+
 plot <-
   ggplot(fix_countries[label%in%toloop], 
          aes(x = year, group = label, color = label)) +
@@ -367,7 +353,7 @@ plot <-
     alpha = 0.2
   ) +
   my_custom_theme + 
-  labs(y = "") + 
+  labs(y = "Coverage (%)", x = "") + 
   theme(legend.position = "none") + 
   ggplot_restrictions + 
   facet_wrap(.~label, scales = "free") + 
@@ -377,3 +363,4 @@ ggsave(paste0("mean_stdev_facetted.pdf"),
        plot,
        width = 10,
        height = 7)
+
