@@ -54,29 +54,57 @@ def_yr_mad <- as.vector(wdi_deflator[date==2011]$deflator)
 def_yr_wdi <- as.vector(wdi_deflator[date==2017]$deflator)
 def_factor <- def_yr_mad / def_yr_wdi
 
+# GDP per capita from WEO -------------------------------------------------
+
+# we get constant PPP GDP per capita from WEO's October 2021 release.
+weo_oct_21 <- fread("WEOOct2021all.txt")
+
+weo_oct_21 <-
+  weo_oct_21[`Subject Descriptor` ==
+               "Gross domestic product per capita, constant prices"&
+               Units == "Purchasing power parity; 2017 international dollar"]
+weo_oct_21 <- as.data.frame(weo_oct_21)
+weo_oct_21 <-
+  weo_oct_21[, c("ISO", "Country", as.character(seq(1980, 2021)))]
+weo_oct_21 <- weo_oct_21 %>%
+  pivot_longer(., as.character(seq(1980, 2021)),
+               names_to = "year")
+weo_oct_21$value <- as.numeric(gsub(",", "", weo_oct_21$value))
+weo_oct_21$year <- as.numeric(weo_oct_21$year)
+
+weo_oct_21 <- weo_oct_21 %>% 
+  rename(iso3c = ISO) %>% 
+  dplyr::select(iso3c, year, value) %>% 
+  rename(date = year,
+         weo_gdppc = value) %>% 
+  na.omit() %>% 
+  dfdt()
+
+waitifnot(nrow(weo_oct_21)>0)
+
 # merge WDI and Maddison GDP PPP estimates -------------------------
 
 mad <- merge(mad, wdi_gdppc, by = c('date','iso3c'), all = TRUE)
+mad <- merge(mad, weo_oct_21,by = c('date','iso3c'), all = TRUE)
+
 # confirm we have unique iso3c dates
 waitifnot(nrow(distinct(mad[,.(date, iso3c)]))==nrow(mad[,.(date, iso3c)]))
 
-# multiply WB GDPpc (2017) by the deflator for 2011 / deflator for 2017:
-mad[,wdi_gdppc:=wdi_gdppc * def_factor]
-
-
-# get 2019 and 2020 GDP figures by using growth from WDI figures to 
+# Get 2019 and 2021 GDP figures by using growth from WEO figures to 
 # project forwards the Maddison GDP figures.
 mad <- mad[order(iso3c,date)]
-mad[,wdi_gdppc_gr:=wdi_gdppc/shift(wdi_gdppc), by = 'iso3c']
+mad[,weo_gdppc_gr:=weo_gdppc/shift(weo_gdppc), by = 'iso3c']
 
 for (i in seq(2015, 2021)) {
-  mad[, gdppc.n := shift(gdppc) * wdi_gdppc_gr, by = 'iso3c']
+  mad[, gdppc.n := shift(gdppc) * weo_gdppc_gr, by = 'iso3c']
   mad[date == i & is.na(gdppc), gdppc := gdppc.n]
   mad <- as.data.table(mad)
 }
 
-ggplot(mad, aes(x = log(wdi_gdppc), y = log(gdppc))) + geom_point()
-mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n')):=NULL]
+waitifnot((mad[iso3c == "USA"][date == 2021]$gdppc>0)==TRUE)
+
+mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n', 
+        'weo_gdppc', 'weo_gdppc_gr')):=NULL]
 mad[,pop:=pop*1000]
 waitifnot(mad[date==2016 & iso3c == "USA"]$pop<=(400*(10^6)))
 waitifnot(mad[date==2016 & iso3c == "USA"]$pop>=300*(10^6))
