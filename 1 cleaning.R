@@ -22,38 +22,6 @@ mad <- rio::import("mpd2020.dta")
 mad <- mad %>% rename(date = year, iso3c = countrycode) %>% as.data.table()
 mad <- mad[date!=1,]
 
-# Real GDP PPP (WDI) -------------------------------------------------
-
-unique_country_codes <- na.omit(unique(countrycode::codelist$iso3c))
-
-wdi_gdppc <- 
-  WDI(
-    indicator = c('wdi_gdppc' = 'NY.GDP.PCAP.PP.KD',
-                  'deflator' = 'NY.GDP.DEFL.ZS'),
-    start = 1960,
-    end = lubridate::year(Sys.Date()),
-    country = unique_country_codes
-  )
-wdi_gdppc <- wdi_gdppc %>% as.data.table()
-wdi_gdppc[,iso3c:=countrycode(iso2c, "iso2c", "iso3c")]
-wdi_gdppc <- wdi_gdppc[!is.na(iso3c)]
-wdi_gdppc[,`:=`(iso2c = NULL, country = NULL)]
-wdi_gdppc[,keeprow:=apply(.SD, 1, function(x) length(na.omit(x)))]
-wdi_gdppc <- wdi_gdppc[keeprow>2,] %>% as.data.table()
-wdi_gdppc[,keeprow:=NULL]
-wdi_gdppc <- wdi_gdppc %>% rename(date = year) %>% dfdt
-wdi_deflator <- wdi_gdppc[,.(date, iso3c, deflator)]
-wdi_gdppc <- wdi_gdppc[,.(date, iso3c, wdi_gdppc)]
-
-# restrict the deflator to be only the US (because converting 
-# international currency)
-wdi_deflator <- distinct(wdi_deflator[iso3c=='USA', .(date, deflator)])
-
-# get the base year deflator for 2011:
-def_yr_mad <- as.vector(wdi_deflator[date==2011]$deflator)
-def_yr_wdi <- as.vector(wdi_deflator[date==2017]$deflator)
-def_factor <- def_yr_mad / def_yr_wdi
-
 # GDP per capita from WEO -------------------------------------------------
 
 # we get constant PPP GDP per capita from WEO's October 2021 release.
@@ -82,9 +50,8 @@ weo_oct_21 <- weo_oct_21 %>%
 
 waitifnot(nrow(weo_oct_21)>0)
 
-# merge WDI and Maddison GDP PPP estimates -------------------------
+# merge WEO and Maddison GDP PPP estimates -------------------------
 
-mad <- merge(mad, wdi_gdppc, by = c('date','iso3c'), all = TRUE)
 mad <- merge(mad, weo_oct_21,by = c('date','iso3c'), all = TRUE)
 
 # confirm we have unique iso3c dates
@@ -103,7 +70,7 @@ for (i in seq(2015, 2021)) {
 
 waitifnot((mad[iso3c == "USA"][date == 2021]$gdppc>0)==TRUE)
 
-mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n', 
+mad[,(c('country','wdi_gdppc_gr','gdppc.n', 
         'weo_gdppc', 'weo_gdppc_gr')):=NULL]
 mad[,pop:=pop*1000]
 waitifnot(mad[date==2016 & iso3c == "USA"]$pop<=(400*(10^6)))
@@ -815,6 +782,9 @@ save.image("oecd_health_numbers_pharma.RData")
 load("oecd_health_numbers_pharma.RData")
 
 # World Bank WDI Data ---------------------------------------------------------
+
+unique_country_codes <- na.omit(unique(countrycode::codelist$iso3c))
+
 wdidata <- WDI(
   indicator = c(
     "% population using internet" = "IT.NET.USER.ZS",
@@ -1627,3 +1597,4 @@ m.alldf$fertilizer <-
 
 save.image("merged2.RData")
 load("merged2.RData")
+
