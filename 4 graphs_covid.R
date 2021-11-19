@@ -67,7 +67,7 @@ plot <-
   #   show.legend = FALSE
   # ) +
   geom_text_repel(
-    data = df.toplot[Period == "start" &
+    data = df.toplot[Period == "end" &
                        !(
                          Category == "Transport technologies" |
                            Category == "Communications technologies" |
@@ -92,12 +92,12 @@ plot <-
   theme(legend.position = "none")
 
 ggsave(
-  paste0("point_start_end_coef_variation.png"),
+  paste0("point_start_end_coef_variation.pdf"),
   plot,
   width = 10,
   height = 14,
-  limitsize = FALSE,
-  dpi = 1000
+  limitsize = FALSE#,
+  #dpi = 1000
 )
 
 
@@ -160,12 +160,19 @@ df.toplot$`Technology (with date)` %>%
 
 # filter so that 2020/2021 is not 0:
 df_fil <- 
-  df.toplot %>% 
-  dplyr::select(-c(period, date_start_end, gdppc))%>% 
-  pivot_wider(names_from = date, values_from = value) %>% 
-  filter(`2020`!=0 & `2021`!=0) %>% 
-  dplyr::select(`Technology (with date)`, iso3c) %>% 
-  mutate(keep = 1) %>% 
+  df.toplot %>%
+  dplyr::select(-c(period, date_start_end, gdppc)) %>%
+  pivot_wider(names_from = date, values_from = value) %>%
+  mutate(
+    tokeep = case_when(
+      `Technology (with date)` == "Covid-19" & `2021` != 0 ~ 1,
+      `Technology (with date)` != "Covid-19" & `2020` != 0 ~ 1,
+      TRUE ~ 0
+    )
+  ) %>% 
+  filter(tokeep == 1) %>%
+  dplyr::select(`Technology (with date)`, iso3c) %>%
+  mutate(keep = 1) %>%
   dfdt()
 check_dup_id(df_fil, c("Technology (with date)", "iso3c"))
 
@@ -201,16 +208,16 @@ plot <-
   scale_y_continuous(breaks = seq(0,100,20))
 
 ggsave(
-  paste0("point_preston_linear.png"),
+  paste0("point_preston_linear.pdf"),
   plot,
   width = 10,
   height = 14,
-  limitsize = FALSE,
-  dpi = 400
+  limitsize = FALSE#,
+  # dpi = 400
 )
 
 
-# curve 3: index of yes/no convergence across time -----------------------
+# curve 3: coefficient of variation across time -----------------------
 
 # get the start and final dates from the other table
 load("table_aesthetic.RData")
@@ -255,8 +262,8 @@ fix_countries[label == "Influenza", pop := pop_t_ge65]
 fix_countries[label == "HPV", pop := pop_f_le15]
 fix_countries[label == "Yellow Fever", pop := pop_t_l60]
 fix_countries[label != "Influenza" & 
-              label != "HPV" & 
-              label != "Yellow Fever", pop := pop_t_le1]
+                label != "HPV" & 
+                label != "Yellow Fever", pop := pop_t_le1]
 fix_countries[label == "Covid-19", pop := poptotal]
 
 waitifnot(all(unlist(fix_countries[!(label%in%percent.labels),.(is.na(pop))])==FALSE))
@@ -265,11 +272,11 @@ fix_countries <- fix_countries %>% rename(year = date) %>% dfdt()
 fix_countries[label == "Covid-19" & year == 2021] %>% 
   write.csv("check.covid.csv", na = "", row.names = FALSE)
 fix_countries <- fix_countries[, .(meanval = mean(value, na.rm = T),
-            stdev = sd(value, na.rm = T),
-            w.meanval = weighted_mean(value, pop, na.rm = TRUE),
-            w.stdev = w.sd(value, pop)
-            ), 
-            by = c("label", "year", "categ")]
+                                   stdev = sd(value, na.rm = T),
+                                   w.meanval = weighted_mean(value, pop, na.rm = TRUE),
+                                   w.stdev = w.sd(value, pop)
+), 
+by = c("label", "year", "categ")]
 fix_countries[, coef.var := stdev / meanval]
 fix_countries[, w.coef.var := w.stdev / w.meanval]
 
@@ -285,24 +292,25 @@ title_wording <- " Values are weighted by vaccine target population."
 coef_var_type_ <- "w.coef.var"
 
 plot <-
-  ggplot(data = fix_countries[year != 1980]
-         , aes(year, eval(as.name(coef_var_type_)), 
-               group = label, color = label)) +
+  ggplot(data = na.omit(fix_countries), 
+         aes(year, eval(as.name(coef_var_type_)), 
+             group = label, color = label)) +
   geom_line() +
   geom_point(show.legend = FALSE) +
-  scale_x_continuous(breaks = seq(1980, 2020, 10)) +
+  scale_x_continuous(breaks = seq(1980, 2020, 10), 
+                     limits = c(1980,2021)) +
   scale_fill_stata() +
   my_custom_theme +
   labs(
     x = "",
-    y = "",
-    title = paste0("Coefficient of Variation over Time"),
-    subtitle = paste0(strwrap(paste0(title_wording),
-               100), collapse = "\n")
+    y = "Coefficient of Variation"#,
+    # title = paste0("Coefficient of Variation over Time"),
+    # subtitle = paste0(strwrap(paste0(title_wording),
+    # 100), collapse = "\n")
   ) +
   guides(color = guide_legend(ncol = 2, override.aes = list(size = 3))) +
   scale_color_custom + 
-  coord_cartesian(xlim = c(1970, 2020))
+  coord_cartesian(xlim = c(1980, 2021))
 
 ggsave(
   paste0("yes_no_tech", "_non_log_", coef_var_type_ , ".pdf"),
