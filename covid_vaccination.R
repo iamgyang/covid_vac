@@ -593,54 +593,49 @@ load("input_dir.RData")
 
 # Table: above 75% & 53% coverage ----------------------------------
 
-# For each of these diseases, when was the time when we first got to 75%
-# global coverage?
-df_disease_avg[coverage >= 75, above_75 := 1]
-df_disease_avg[coverage < 75, above_75 := 0]
-df_disease_avg[, minyr := min(year, na.rm = T), by = c("disease")]
-df_disease_avg[, max_cov := max(coverage, na.rm = T), by = c("disease")]
-df_disease_avg[, min_cov := min(coverage, na.rm = T), by = c("disease")]
-df_disease_avg[max_cov >= 75 & min_cov <= 75, 
-   min_above_75 := min(year, na.rm = T), 
-   by = c("disease", "above_75")]
-df_disease_avg[above_75==0,min_above_75:=NA]
-df_disease_avg[,min_above_75:=mean(min_above_75, na.rm = T),by = c("disease")]
+# what year for each disease did we achieve XYZ% coverage?
+cov_targets <- c(20, 40, 75)
 
-# year of above 75% coverage and the number of the population that our sample covers:
-df_glob_75 <- df_disease_avg[year==min_above_75 | is.na(min_above_75),.(disease, perc_pop, min_above_75)][, .(min_above_75 = mean(min_above_75), perc_pop = mean(perc_pop, na.rm = T)), by = disease]
+disease_accomplish_out <- CJ(
+  disease = na.omit(unique(df_disease_avg$disease)),
+  income = c(na.omit(unique(df$income)), "Global"),
+  coverage = cov_targets
+)
 
-# CURRENT coverage
-df_cur_cov <- df_disease_avg[,maxyr:=max(year), by = disease][year==maxyr,.(disease, rec_cov = coverage, rec_cov_pop = perc_pop)][]
+# Loop through the table above, which gives coverage by income group for each 
+# disease across time. Then, get the earliest year where we saw above an
+# X% coverage rate for that group. Insert that value into the output table.
+for (d in unique(df_disease_avg$disease)) {
+for (t in cov_targets) {
+for (i in unique(disease_accomplish_out$income)) {
+      a <-
+        min(df_disease_avg[coverage >= t &
+                             disease == d &
+                             income == i]$year, na.rm = T)
+      disease_accomplish_out[disease == d &
+                           coverage == t & income == i, year := a]
+      disease_accomplish_out <- as.data.table(disease_accomplish_out)
+}
+}
+}
 
-# merge the two:
-smmry_tbl_75 <- merge(df_glob_75, df_cur_cov, by = c("disease"))
-smmry_tbl_75[is.na(min_above_75), perc_pop:=NA]
-smmry_tbl_75 <- smmry_tbl_75[order(min_above_75)]
-smmry_tbl_75[,(c("perc_pop","rec_cov_pop")):=lapply(.SD, function(x) {100*signif(x, 3)}), .SDcols = c("perc_pop","rec_cov_pop")]
-smmry_tbl_75[,rec_cov:=lapply(.SD, function(x) {signif(x, 3)}), .SDcols = c("rec_cov")]
-smmry_tbl_75 <- smmry_tbl_75[disease!="smallpox"]
-names(smmry_tbl_75) <-
-  c(
-    "Disease",
-    "Year Above 75% Coverage",
-    "Percent of Population with \nAvailable Data in Year with 75% Coverage",
-    "Most recent Coverage Estimate",
-    "Percent of Population with \nAvailable Data in Most Recent Coverage Estimate"
-  )
-smmry_tbl_75 %>% kableExtra::kbl()
+# pivot wider:
+disease_accomplish_out <- disease_accomplish_out %>% spread(., coverage, year)
 
+# for the following graph we're only interested in global estimates:
+disease_accomplish <- as.data.table(disease_accomplish_out[income == "Global"])
+disease_accomplish$income <- NULL
 
 # Line graph for microbe ID -----------------------------------------------
 
 prog_df <-
-  merge(smmry_tbl_75[, .(`Disease`, `Year Above 75% Coverage`)],
+  merge(disease_accomplish,
         vac_disc,
-        by.x = c("Disease"),
-        by.y = c("disease"),
+        by = c("disease"),
         all = T) %>% dfdt()
 
 # make the disease names pretty
-prog_df$Disease <- prog_df$Disease %>% lapply(., custom_title)
+prog_df$disease <- prog_df$disease %>% lapply(., custom_title)
 
 # Export to google sheets for Data Wrapper:
 
@@ -660,47 +655,98 @@ prog_df$Disease <- prog_df$Disease %>% lapply(., custom_title)
 #   email = "gzyang4@gmail.com"
 # )
 # sheets_auth()
-prog_df[is.na(`Year Above 75% Coverage`), endpoint:= 2020]
-prog_df[!is.na(`Year Above 75% Coverage`), endpoint:= `Year Above 75% Coverage`]
-prog_df[Disease=="Smallpox", endpoint:=1980]
+prog_df[is.na(`75`), endpoint:= 2020]
+prog_df[!is.na(`75`), endpoint:= `75`]
+prog_df[disease=="Smallpox", endpoint:=1980]
 write_sheet(prog_df, ss = "https://docs.google.com/spreadsheets/d/1fpwpesVd74Dr5eF4zK4RIMvKwOIGlsB1xeRPFVnWPdo/edit?usp=sharing", sheet = 1)
 
-# Gaps by income group between vaccine licensing and addition to schedule, then to reach 75 percent of target population------------------------------------------------------------
+# Gaps by income group between vaccine licensing and addition to schedule, 
+# then to reach 75 percent of target population------------------------------
 
-# For each of these diseases, when was the time when we first got to 75%
-# global coverage?
-df[coverage >= 75, above_75 := 1]
-df[coverage < 75, above_75 := 0]
-df[, minyr := min(year, na.rm = T), by = c("disease", "iso3c")]
-df[, max_cov := max(coverage, na.rm = T), by = c("disease", "iso3c")]
-df[, min_cov := min(coverage, na.rm = T), by = c("disease", "iso3c")]
-df[max_cov >= 75 & min_cov <= 75, 
-   min_above_75 := min(year, na.rm = T), 
-   by = c("disease", "above_75", "iso3c")]
-df[above_75==0,min_above_75:=NA]
-df[,min_above_75:=mean(min_above_75, na.rm = T),by = c("disease", "iso3c")]
+discovery_df <- unique(df[,.(disease, licensing)])
+disease_accomplish_out <- 
+  merge(disease_accomplish_out, discovery_df, by = c("disease"))
 
+# replace values with years from discovery of vaccine to X% vaccinated for that 
+# income group:
+for (i in as.character(c(20, 40, 75))) {
+  disease_accomplish_out[,c(i):=eval(as.name(i))-licensing]
+  disease_accomplish_out <- disease_accomplish_out %>% as.data.table()
+}
+disease_accomplish_out <- disease_accomplish_out %>% 
+  pivot_longer(., cols = c(`20`:`75`), 
+               names_to = "cov", 
+               values_to = "yrs_from_disc") %>% 
+  mutate(disease = lapply(disease, custom_title) %>% unlist() %>% unlist()) %>% 
+  as.data.frame() %>% 
+  as.data.table()
 
-# get the differences between a certain target and licensing:
-df_income_disease <- unique(df[,.(country, iso3c, disease, yr_sched, income, microbe_id, licensing, min_above_75)])
-df_income_disease[,diff_license_schedule:=yr_sched-licensing]
-df_income_disease[,diff_license_75:=min_above_75-licensing]
+plot <- disease_accomplish_out %>%
+  filter(cov == "20" & income != "Global") %>%
+  mutate(
+    disease = factor(disease, levels = 
+                       unique(disease_accomplish_out[
+                         income == "Global"][
+                           order(yrs_from_disc)]$disease))
+  ) %>% 
+  mutate(income = factor(income, levels = c("HIC", "UMIC", "LMIC", "LIC"))) %>% 
+  na.omit() %>% 
+  ggplot(.,
+         aes(
+           x = yrs_from_disc,
+           y = disease,
+           group = income,
+           fill = income,
+           shape = income
+         )) +
+  geom_point(
+    size = 5,
+    alpha = 0.7,
+    stroke = 2,
+    aes(color = income)
+  ) +
+  my_custom_theme +
+  theme(
+    axis.text.x = element_text(
+      angle = 0,
+      vjust = 0.5,
+      size = 12,
+      color = "grey57"
+    ),
+    axis.title.x = element_text(
+      angle = 0,
+      vjust = 0.5,
+      size = 12,
+      color = "grey57"
+    ),
+    axis.title.y = element_text(
+      angle = 0,
+      vjust = 0.5,
+      hjust = 1,
+      size = 12
+    ),
+    axis.text.y = element_text(
+      size = 12,
+      vjust = 0.5,
+      margin = unit(c(
+        t = 0,
+        r = 2,
+        b = 0,
+        l = 0
+      ), "mm"),
+      color = "black"
+    ),
+    axis.ticks.x = element_line(size = 0.5, color = "grey57"),
+    axis.line.x = element_line(size = 0.5, color = "grey57")
+  ) + 
+  scale_x_continuous(breaks = seq(0,100,10)) + 
+  scale_color_manual(values = c("#00677f", "#ffbf3f", "#693c5e", "#696158")) + 
+  labs(x = "Years since vaccine discovery to 20% coverage", y = "", subtitle = "")
 
+setwd(input_dir)
+ggsave("yrs_to_20_percent.png", plot, width = 9, height = 5)
 
-df_income_disease <-
-  df_income_disease[, .(
-    diff_license_schedule = mean(diff_license_schedule, na.rm = T),
-    diff_license_75 = mean(diff_license_75, na.rm = T),
-    microbe_id = mean(microbe_id, na.rm = T)
-  ),
-  by = .(disease, income)][!is.na(income)]
-
-df_income_disease <- df_income_disease[,.(disease, income, diff_license_75)]
-df_income_disease <- df_income_disease %>% na.omit() %>% 
-  spread(., income, diff_license_75)
-df_income_disease$disease <- df_income_disease$disease %>% lapply(., custom_title)
-
-write_sheet(df_income_disease, ss = "https://docs.google.com/spreadsheets/d/1cRYaM8cKGcFVTbCtvxttjOXpkH4iPLim2aYIYLdkSPw/edit?usp=sharing", sheet = 1)
+# write_sheet(df_income_disease, ss = "https://docs.google.com/spreadsheets/d/1cRYaM8cKGcFVTbCtvxttjOXpkH4iPLim2aYIYLdkSPw/edit?usp=sharing", sheet = 1)
 
 # Line: UK/Developing World across time ----------------------------
 
@@ -761,7 +807,7 @@ plot <- toplot %>%
   scale_color_custom +
   labs(y = "", x = "") +
   theme(legend.key.size = unit(3, 'mm')) +
-  scale_x_continuous(breaks = seq(1940, 2020, 10))
+  scale_x_continuous(breaks = seq(1970, 2020, 10), limits = c(1970, 2020))
 
 ggsave(
   "Line - UK vs. Dev World.pdf",
