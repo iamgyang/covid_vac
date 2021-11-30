@@ -505,6 +505,26 @@ load("prior to replacing w zero.RData")
 # does with their data when estimating coverage)
 df[is.na(coverage), coverage:=0]
 
+# Make sure that the microbe ID, licensing year, schedule year, 
+# and income is filled:
+df <- df %>%
+  arrange(disease) %>%
+  group_by(disease) %>%
+  fill(microbe_id, .direction = "downup") %>%
+  fill(licensing, .direction = "downup") %>%
+  ungroup() %>%
+  arrange(iso3c, disease) %>%
+  group_by(iso3c, disease) %>%
+  fill(yr_sched, .direction = "downup") %>%
+  ungroup() %>%
+  arrange(iso3c, year) %>%
+  group_by(iso3c) %>%
+  # IMPORTANT: for INCOME, we fill BACKWARDS (i.e. assume that 
+  # if the country was LIC in 1970, then it was a LIC in 1960)
+  fill(income, .direction = "downup") %>%
+  as.data.frame() %>%
+  as.data.table()
+
 # Create a table that shows the global coverage estimates:
 df_disease_avg <- 
   df[, .(coverage = weighted_mean(coverage, poptotal, na.rm = T),
