@@ -74,7 +74,7 @@ income.check <- merge(income.check, df_disease_avg,
 
 income.check <- 
   income.check[coverage>=20 | variable == "influenza" | variable == "HPV" | 
-                 variable == "covid-19"]
+                 variable == "covid-19" | variable == "cell.subsc"]
 
 # For each technology, make sure that they have
 # 1) start and end date have a sample of ___ countries
@@ -173,11 +173,14 @@ percent.labels <-
 # (they're already per capita), we set population to be 1 here. (then, later,
 # we divide by population for all the variables.)
 
-chatting[label %in% percent.labels, pop := 1]
+chatting[label %in% percent.labels, pop := 100]
 
+# at this point (AFTER cellular subscriptions has been converted to per capita, 
+# make it labeled as part of the vaccine paper)
+# chatting[variable == "cell.subsc", categ:= "Vaccine--Covid Paper"]
 
 percent.vars <- chatting[label%in%percent.labels]$variable %>% unique()
-chatting[, value := value / pop]
+chatting[, value := value / pop * 100]
 
 # Check that variable like percent irrigated is still in percentage form
 
