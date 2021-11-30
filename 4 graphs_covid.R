@@ -1,15 +1,18 @@
 # curve 1: preston curve ----------------------------------
+load("restrict_sample.RData")
+df.toplot <-
+  chatting[, .(iso3c, gdppc, date, value,
+               variable, start.date, end.date, categ)]
+df.toplot <- df.toplot[categ == "Vaccine--Covid Paper"]
+fdEGZGv35H2nt <- df.toplot %>% as.data.frame() %>% as.data.table()
+
 load("table_aesthetic.RData")
 start.end.dates <-
   as.data.table(chatting$Yes[, .(`Technology (with date)`,
                                  Variable,
                                  `Start Date`,
                                  `End Date`)])
-load("restrict_sample.RData")
-df.toplot <-
-  chatting[, .(iso3c, gdppc, date, value,
-               variable, start.date, end.date, categ)]
-df.toplot <- df.toplot[categ == "Vaccine--Covid Paper"]
+df.toplot <- fdEGZGv35H2nt %>% as.data.frame() %>% as.data.table()
 
 # for Preston curves, we do not want to plot HPV, Smallpox, or Flu:
 df.toplot <- df.toplot %>%
@@ -76,6 +79,21 @@ check_dup_id(df_fil, c("Technology (with date)", "iso3c"))
 df.toplot <- merge(df.toplot, df_fil, all.x = T)
 df.toplot <- df.toplot %>% filter(keep == 1)
 
+# for cellular subscriptions, sometimes we have greater subscriptions 
+# than the population
+df.toplot[value>=100,value:=100]
+waitifnot(df.toplot$value==100<=0.5)
+
+# make cellular subscriptions come last:
+df.toplot$`Technology (with date)` <- df.toplot$`Technology (with date)` %>% 
+  factor(.,
+         levels = c(
+           setdiff(sort(unique(
+             df.toplot$`Technology (with date)`
+           )), "Cellular subscriptions"),
+           "Cellular subscriptions"
+         ))
+
 plot <- 
   ggplot(df.toplot, 
   aes(x = gdppc, 
@@ -102,7 +120,9 @@ plot <-
   scale_color_custom + 
   guides(colour = guide_legend(override.aes = list(size = 3))) + 
   facet_wrap(~`Technology (with date)`) + 
-  scale_y_continuous(breaks = seq(0,100,20))
+  scale_y_continuous(breaks = seq(0,100,20)) + 
+  coord_cartesian(ylim = c(0, 100))
+
 
 ggsave(
   paste0("point_preston_linear.pdf"),
@@ -115,6 +135,7 @@ ggsave(
 
 
 # curve 2: coefficient of variation across time -----------------------
+
 
 # get the start and final dates from the other table
 load("table_aesthetic.RData")
@@ -134,6 +155,11 @@ chatting <- chatting %>% filter(!is.na(`Start Date`))
 fix_countries <- chatting %>% dfdt()
 chatting <- NULL
 
+# mean of cellular subscriptions should be between 0 and 100:
+fix_countries[variable == "cell.subsc", value:=value/pop*100]
+waitifnot(mean(na.omit(fix_countries$value[fix_countries$variable=="cell.subsc"]))>0)
+waitifnot(mean(na.omit(fix_countries$value[fix_countries$variable=="cell.subsc"]))<100)
+
 # weighted standard deviation function:
 w.sd <- function(x, wt) {sqrt(wtd.var(x, wt))}
 
@@ -148,7 +174,11 @@ weighted_mean <-  function(x, w, ..., na.rm = FALSE) {
 }
 
 # limit to the vaccines for vaccine paper:
-fix_countries <- fix_countries[categ=="Vaccine--Covid Paper"]
+fix_countries <- fix_countries[categ=="Vaccine--Covid Paper" | 
+                               variable == "cell.subsc"]
+
+# check cellular subscriptions still are there
+waitifnot(nrow(fix_countries[variable == "cell.subsc",])>0)
 
 # calculate coefficient of variation across each year
 # and a weighted coefficient of variation. NOTE: weighted coefficient of variation may have FEWER countries than the standard coefficient of variation due to lack of data for population or land IF the variable was a percent variable.
@@ -162,8 +192,12 @@ fix_countries[label != "Influenza" &
                 label != "HPV" & 
                 label != "Yellow Fever", pop := pop_t_le1]
 fix_countries[label == "Covid-19", pop := poptotal]
+fix_countries[label == "Cellular subscriptions", pop := poptotal]
 
-waitifnot(all(unlist(fix_countries[!(label%in%percent.labels),.(is.na(pop))])==FALSE))
+# make sure that population for cellular subscriptions in US is 
+# accurate:
+waitifnot(na.omit(fix_countries[label == "Cellular subscriptions" & iso3c == "USA" & (date == 2021 | date == 2020)]$pop)>=300*10^6)
+waitifnot(na.omit(fix_countries[label == "Cellular subscriptions" & iso3c == "USA" & (date == 2021 | date == 2020)]$pop)<=400*10^6)
 
 fix_countries <- fix_countries %>% rename(year = date) %>% dfdt()
 fix_countries[label == "Covid-19" & year == 2021] %>% 
@@ -179,6 +213,7 @@ fix_countries[, w.coef.var := w.stdev / w.meanval]
 
 # we drop smallpox because data is too patchy:
 fix_countries <- fix_countries[label!="Smallpox"]
+fix_countries <- fix_countries[label!="Cellular subscriptions"]
 
 save.image("index_convergence.RData")
 load("index_convergence.RData")
@@ -187,6 +222,7 @@ load("index_convergence.RData")
 
 title_wording <- " Values are weighted by vaccine target population."
 coef_var_type_ <- "w.coef.var"
+
 
 plot <-
   ggplot(data = na.omit(fix_countries), 
@@ -226,7 +262,7 @@ load("index_convergence.RData")
 # restrict to be all from 0-100 on y axis and 1980-2020 on x axis:
 
 ggplot_restrictions <- 
-       list(coord_cartesian(ylim = c(0, 100), xlim = c(1980, 2021)))
+       list(coord_cartesian(ylim = c(0, 105), xlim = c(1980, 2021)))
 
 toloop <- unique(fix_countries$label)
 toloop <- setdiff(toloop, "Smallpox")
@@ -243,6 +279,16 @@ fix_countries[year%in%c(2021) & label != "Covid-19", w.meanval:=NA]
 # for 2019, respectively).
 fix_countries[year%in%c(2020) & label %in% c("Influenza", "HPV"), 
           (c("meanval", "stdev", "w.stdev", "w.meanval")):=NA]
+
+# make cellular subscriptions come last:
+fix_countries$label <- fix_countries$label %>% 
+  factor(.,
+         levels = c(
+           setdiff(sort(unique(
+             fix_countries$label
+           )), "Cellular subscriptions"),
+           "Cellular subscriptions"
+         ))
 
 plot <-
   ggplot(fix_countries[label%in%toloop], 
