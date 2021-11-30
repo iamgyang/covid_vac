@@ -819,217 +819,75 @@ ggsave(
 )
 
 
-# _____________________ ---------------------------------------------------
-# _____________________ ---------------------------------------------------
-# COVID Supply Chain Data -------------------------------------------------
-setwd(raw_dir)
-covsup <- readxl::read_xlsx("imf-who-covid-19-vaccine-supply-tracker.xlsx", 
-                            sheet = 3)
-names(covsup) <- 
-  unlist(covsup[2,]) %>% 
-  gsub("%", "perc", ., fixed = T) %>% 
-  make.names() %>% 
-  cleanname() %>% cleanname()
-covsup <- covsup[3:nrow(covsup),] %>% dfdt()
-tonum <- setdiff(names(covsup), c( "countries.and.areas", "iso3"))
-covsup[,(tonum):=lapply(.SD, as.numeric), .SDcols = tonum]
+# Dot - Bloomberg time to 75% vaccination: ----------------------------
 
-# Variables to get: 
-# ISO 3-digit country code
-# Population
-# 
-# Final total secured and/or expected vaccine supply
-# Vaccine needed to fully vaccinate 70% of the country or area's population
-covsup <- covsup[, .(
-  iso3c = iso3,
-  pop = population,
-  sec_cov = secured.and.or.expected.vaccine.perc.of.population.,
-  needed = vaccine.needed.to.reach.70perc.of.population.millions.of.courses.,
-  sec = secured.and.or.expected.vaccine.millions.of.courses.,
-  bilat_cov = bilateral.deals.perc.of.population.,
-  covax_cov = covax.total.perc.of.population.,
-  eu_cov = eu.deal.perc.of.population.,
-  other_cov = other.sources.perc.of.population.,
-  dom_cov = domestic.supply.perc.of.population.
-)]
+# bloomberg data:
+bloom <- readxl::read_xlsx(paste0(raw_dir, "/bloomberg_covid_vaccination_time_to_full_cov.xlsx"))
+bloom <- dfdt(bloom)
+bloom[grepl("coverage", time_to_full_cov), cov:=time_to_full_cov %>% 
+        gsub("has ", "",.) %>% 
+        gsub(" coverage", "",.) %>% 
+        gsub("\\%", "", .) %>% 
+        as.numeric()]
+bloom[grepl("coverage", time_to_full_cov), time_to_full_cov:=NA]
 
-# the variable `secured and or expected vaccine perc of population`
-# should indicate the percent of the population covered. (just making
-# sure I understand the data)
-perc_dis <- function(x,y){
-  2 * abs(x - y)/ (x+y)
-}
+# add a factor to calculate days to full coverage:
+bloom[grepl("week", time_to_full_cov), factor:=7]
+bloom[grepl("month", time_to_full_cov), factor:=30]
+bloom[grepl("year", time_to_full_cov), factor:=365]
+bloom[, time_to_full_cov:=time_to_full_cov %>% 
+        gsub("weeks","",.) %>% 
+        gsub("months","",.) %>% 
+        gsub("years","",.) %>% 
+        gsub("week","",.) %>% 
+        gsub("month","",.) %>% 
+        gsub("year","",.) %>% 
+        gsub("> ","",.) %>% 
+        gsub("< ","",.) %>% 
+        stringr::str_trim()]
+waitifnot(nrow(bloom[is.na(factor) & !is.na(time_to_full_cov)])==0)
+waitifnot(!all(is.na(bloom$cov)))
+bloom[,time_to_full_cov:=as.numeric(time_to_full_cov)]
 
-waitifnot(all(perc_dis(covsup$sec_cov, (
-  (covsup$sec * 10 ^ 6) / covsup$pop * 100
-)) < 0.01))
+# days to full coverage
+bloom[,time_to_full_cov:=time_to_full_cov * factor] 
 
-covsup[,c("needed", "sec"):=NULL]
+# ISO codes:
+bloom[,iso3c:=name2code(country)]
 
-# WEO ---------------------------------------------------
-weo_oct_21 <- fread("WEOOct2021all.txt")
-weo_oct_21 <- 
-  weo_oct_21[`Subject Descriptor` == 
-               "Gross domestic product per capita, current prices" & 
-               Units == "Purchasing power parity; international dollars",
-             .(iso3c = ISO, gdppc = `2021`)]
-weo_oct_21$gdppc <- as.numeric(gsub(",", "", weo_oct_21$gdppc))
-weo_oct_21 <- na.omit(weo_oct_21)
-check_dup_id(weo_oct_21, c("iso3c"))
+# GDP per capita:
 
-# Economist Excess Mortality -----------------------------
-exc_d <- fread("economist_excess_deaths.csv")
-exc_d[country == "Congo", country:="congo kinshasa"]
-exc_d[,iso3c:=name2code(country)]
-exc_d <- exc_d[!is.na(iso3c)]
-exc_d$country <- NULL
-exc_d[,excess:=(lower + upper)/2]
+bloom <- merge(bloom, na.omit(df[year == 2021,.(gdppc, iso3c, poptotal)]), 
+      by = "iso3c", all = FALSE)
+bloom <- bloom[!is.na(gdppc)]
 
-# Income groups ---------------------------------------------------
-income <- readstata13::read.dta13("historical_wb_income_classifications.dta")
-income <- income %>% dfdt()
-income <- income[year==2021]
+# where coverage is above 75, put days to 75% coverage as 0:
+bloom[cov>=75, time_to_full_cov:=0]
 
-# Merge ---------------------------------------------------
-dt <- merge(exc_d, weo_oct_21, all.x = T, by = "iso3c")
-dt <- merge(dt, income[,.(income, iso3c)], all.x = T, by = "iso3c")
-dt <- merge(dt, covsup, by = "iso3c", all.x = T)
+# get WB country groups:
+bloom[,region:=countrycode(iso3c, "iso3c", "region")]
 
-check_dup_id(dt, c("iso3c"))
-setwd(input_dir)
-
-# Income averages: ---------------------------------------------------
-for (i in c("lower", "upper", "official", 
-            "gdppc", "excess", "sec_cov", 
-            "bilat_cov", "covax_cov", "eu_cov",
-            "other_cov", "dom_cov")) {
-  var_name <- paste0("inc_", i)
-  dt <- dt[,(var_name):= weighted_mean(eval(as.name(i)), pop, na.rm = T),
-     by = income][]
-}
-waitifnot(length(na.omit(unique(dt$inc_excess)))==4)
-waitifnot(length(na.omit(unique(dt$inc_gdppc)))==4)
-waitifnot(length(na.omit(unique(dt$inc_upper)))==4)
-waitifnot(length(na.omit(unique(dt$inc_lower)))==4)
-waitifnot(all(na.omit(dt$upper>=dt$lower)))
-waitifnot(all(na.omit(dt$excess>=dt$lower)))
-waitifnot(all(na.omit(dt$inc_excess>=dt$inc_lower)))
-waitifnot(all(na.omit(dt$inc_upper>=dt$inc_lower)))
-
-# GRAPH -------------------------------------------------------------------
-dt$income <- dt$income %>% factor(levels = c("LIC", "LMIC", "UMIC", "HIC"))
-
-option_log <- list(scale_x_log10(labels = scales::dollar_format(),
-                     breaks = breaks_log(n = 6)))
-
-for (i in c("sec_cov",
-            "bilat_cov",
-            "covax_cov",
-            "eu_cov",
-            "other_cov",
-            "dom_cov")) {
-  i <- "sec_cov"
-  plot <- ggplot(dt[!is.na(income)], aes(
-    x = gdppc,
-    y = eval(as.name(i)),
-    color = income
-  )) + 
-    geom_point() +
-    my_custom_theme +
-    scale_color_custom +
-    labs(y = "Total vaccine coverage purchased\n(% of population)", x = "GDP per capita") +
-    scale_x_log10(labels = scales::dollar_format(),
-                  breaks = breaks_log(n = 6)) + 
-    ggrepel::geom_text_repel(data = dt[income!="LIC"], 
-                             aes(label = code2name(iso3c)), 
-                             show.legend = FALSE)
-  
-  ggsave(paste0(i, "gdppc_scatter_income.pdf"),
-         plot,
-         width = 10,
-         height = 7)
-  
-  plot <- ggplot(dt, aes(
-    x = excess,
-    y = eval(as.name(i)),
-    color = income
-  )) + 
-    geom_point() +
-    my_custom_theme +
-    scale_color_custom +
-    labs(y = i, x = "Excess Mortality") + 
-    scale_x_log10(labels = scales::pretty_breaks(n = 6),
-                  breaks = breaks_log(n = 6))
-  
-  ggsave(paste0(i, "excess_mort_scatter_income.pdf"),
-         plot,
-         width = 7,
-         height = 5)
-}
-
-
-# Check WHO ---------------------------------------------------------------
-
-# compare with our data:
-load("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input/index_convergence.RData")
-
-setwd(paste0(raw_dir, "/who_check"))
-
-dli <- dir()
-dli <- lapply(dli, read_xlsx)
-dli <- rbindlist(dli, fill = T)
-check_dup_id(dli, c("YEAR", "ANTIGEN", "COVERAGE"))
-dli <- dli[,.(year = YEAR, 
-              antigen = ANTIGEN, 
-              desc = ANTIGEN_DESCRIPTION, 
-              coverage = COVERAGE)]
-
-fix_countries <- setDT(fix_countries)[,
-                      .(label, year, meanval = w.meanval)][order(label)]
-
-temp_bridge <- fread("desc	label
-BCG	
-DTP-containing vaccine, 3rd dose	Diptheria
-DTP-containing vaccine, 3rd dose	Tetanus
-DTP-containing vaccine, 3rd dose	Pertussis
-Hib3	Hib
-HepB3	Hepb
-HPV VACCINATION PROGRAM COVERAGE - FIRST DOSE - FEMALES Target population who received the first dose of HPV vaccine in the reporting year	HPV
-HPV Vaccination coverage by age 15, complete schedule, females	HPV
-Measles-containing vaccine, 2nd dose	Measles
-Pneumococcal conjugate vaccine, final dose	Pneumococcal
-Inactivated polio-containing vaccine, 1st dose	
-Polio, 3rd dose	Polio
-Protection at birth (PAB) against neonatal tetanus	Tetanus
-Rotavirus, last dose	Rotavirus
-Rubella-containing vaccine, 1st dose	Rubella
-Yellow fever vaccine	
-")
-
-dli <- merge(dli, temp_bridge, by = "desc", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all()
-fix_countries <- merge(fix_countries, temp_bridge, by = "label", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
-check <- merge(fix_countries, dli, by = c("desc", "label", "year"))
-plot <- ggplot(check,
-       aes(
-         x = coverage,
-         y = meanval,
-         color = label,
-         group = label,
-         label = year
-       )) + geom_point() +
-  labs(x = "WHO", y = "Our Estimate", title = "Global Estimates of Vaccine Coverage") +
+# Graph:
+setwd("C:/Users/user/Dropbox/CGD/Projects/covid_vaccination/input")
+plot <- ggplot(bloom,
+               aes(
+                 x = gdppc,
+                 y = time_to_full_cov,
+                 size = poptotal,
+                 color = region
+               )) +
+  geom_point(alpha = 0.5) +
+  scale_size_continuous(range = c(1, 20), guide = 'none') + 
   my_custom_theme +
-  geom_abline(intercept = 0,
-              slope = 1,
-              size = 0.5) + 
-  coord_cartesian(ylim = c(0, 100), xlim = c(0, 100)) + 
-  geom_text_repel(show.legend = FALSE) + 
-  scale_color_custom
+  labs(y = "Days to 75% coverage",
+       x = "GDP per capita",
+       subtitle = "Points scaled to population size.") +
+  scale_color_custom +
+  scale_x_log10(labels = scales::dollar_format()) +
+  annotation_logticks(side = "b") +
+  guides(color = guide_legend(ncol = 2))
 
-setwd(input_dir)
-ggsave("global_estimates_comparison2.pdf", plot)
-
-
+ggsave("dot_time_to_75_cov.png", plot)
 
 
 
@@ -1037,3 +895,240 @@ ggsave("global_estimates_comparison2.pdf", plot)
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 
+# # _____________________ ---------------------------------------------------
+# # _____________________ ---------------------------------------------------
+# # COVID Supply Chain Data -------------------------------------------------
+# setwd(raw_dir)
+# covsup <- readxl::read_xlsx("imf-who-covid-19-vaccine-supply-tracker.xlsx", 
+#                             sheet = 3)
+# names(covsup) <- 
+#   unlist(covsup[2,]) %>% 
+#   gsub("%", "perc", ., fixed = T) %>% 
+#   make.names() %>% 
+#   cleanname() %>% cleanname()
+# covsup <- covsup[3:nrow(covsup),] %>% dfdt()
+# tonum <- setdiff(names(covsup), c( "countries.and.areas", "iso3"))
+# covsup[,(tonum):=lapply(.SD, as.numeric), .SDcols = tonum]
+# 
+# # Variables to get: 
+# # ISO 3-digit country code
+# # Population
+# # 
+# # Final total secured and/or expected vaccine supply
+# # Vaccine needed to fully vaccinate 70% of the country or area's population
+# covsup <- covsup[, .(
+#   iso3c = iso3,
+#   pop = population,
+#   sec_cov = secured.and.or.expected.vaccine.perc.of.population.,
+#   needed = vaccine.needed.to.reach.70perc.of.population.millions.of.courses.,
+#   sec = secured.and.or.expected.vaccine.millions.of.courses.,
+#   bilat_cov = bilateral.deals.perc.of.population.,
+#   covax_cov = covax.total.perc.of.population.,
+#   eu_cov = eu.deal.perc.of.population.,
+#   other_cov = other.sources.perc.of.population.,
+#   dom_cov = domestic.supply.perc.of.population.
+# )]
+# 
+# # the variable `secured and or expected vaccine perc of population`
+# # should indicate the percent of the population covered. (just making
+# # sure I understand the data)
+# perc_dis <- function(x,y){
+#   2 * abs(x - y)/ (x+y)
+# }
+# 
+# waitifnot(all(perc_dis(covsup$sec_cov, (
+#   (covsup$sec * 10 ^ 6) / covsup$pop * 100
+# )) < 0.01))
+# 
+# covsup[,c("needed", "sec"):=NULL]
+# 
+# # WEO ---------------------------------------------------
+# weo_oct_21 <- fread("WEOOct2021all.txt")
+# weo_oct_21 <- 
+#   weo_oct_21[`Subject Descriptor` == 
+#                "Gross domestic product per capita, current prices" & 
+#                Units == "Purchasing power parity; international dollars",
+#              .(iso3c = ISO, gdppc = `2021`)]
+# weo_oct_21$gdppc <- as.numeric(gsub(",", "", weo_oct_21$gdppc))
+# weo_oct_21 <- na.omit(weo_oct_21)
+# check_dup_id(weo_oct_21, c("iso3c"))
+# 
+# # Economist Excess Mortality -----------------------------
+# exc_d <- fread("economist_excess_deaths.csv")
+# exc_d[country == "Congo", country:="congo kinshasa"]
+# exc_d[,iso3c:=name2code(country)]
+# exc_d <- exc_d[!is.na(iso3c)]
+# exc_d$country <- NULL
+# exc_d[,excess:=(lower + upper)/2]
+# 
+# # Income groups ---------------------------------------------------
+# income <- readstata13::read.dta13("historical_wb_income_classifications.dta")
+# income <- income %>% dfdt()
+# income <- income[year==2021]
+# 
+# # Merge ---------------------------------------------------
+# dt <- merge(exc_d, weo_oct_21, all.x = T, by = "iso3c")
+# dt <- merge(dt, income[,.(income, iso3c)], all.x = T, by = "iso3c")
+# dt <- merge(dt, covsup, by = "iso3c", all.x = T)
+# 
+# check_dup_id(dt, c("iso3c"))
+# setwd(input_dir)
+# 
+# # Income averages: ---------------------------------------------------
+# for (i in c("lower", "upper", "official", 
+#             "gdppc", "excess", "sec_cov", 
+#             "bilat_cov", "covax_cov", "eu_cov",
+#             "other_cov", "dom_cov")) {
+#   var_name <- paste0("inc_", i)
+#   dt <- dt[,(var_name):= weighted_mean(eval(as.name(i)), pop, na.rm = T),
+#      by = income][]
+# }
+# waitifnot(length(na.omit(unique(dt$inc_excess)))==4)
+# waitifnot(length(na.omit(unique(dt$inc_gdppc)))==4)
+# waitifnot(length(na.omit(unique(dt$inc_upper)))==4)
+# waitifnot(length(na.omit(unique(dt$inc_lower)))==4)
+# waitifnot(all(na.omit(dt$upper>=dt$lower)))
+# waitifnot(all(na.omit(dt$excess>=dt$lower)))
+# waitifnot(all(na.omit(dt$inc_excess>=dt$inc_lower)))
+# waitifnot(all(na.omit(dt$inc_upper>=dt$inc_lower)))
+# 
+# # GRAPH -------------------------------------------------------------------
+# dt$income <- dt$income %>% factor(levels = c("LIC", "LMIC", "UMIC", "HIC"))
+# 
+# option_log <- list(scale_x_log10(labels = scales::dollar_format(),
+#                      breaks = breaks_log(n = 6)))
+# 
+# for (i in c("sec_cov",
+#             "bilat_cov",
+#             "covax_cov",
+#             "eu_cov",
+#             "other_cov",
+#             "dom_cov")) {
+#   i <- "sec_cov"
+#   plot <- ggplot(dt[!is.na(income)], aes(
+#     x = gdppc,
+#     y = eval(as.name(i)),
+#     color = income
+#   )) + 
+#     geom_point() +
+#     my_custom_theme +
+#     scale_color_custom +
+#     labs(y = "Total vaccine coverage purchased\n(% of population)", x = "GDP per capita") +
+#     scale_x_log10(labels = scales::dollar_format(),
+#                   breaks = breaks_log(n = 6)) + 
+#     ggrepel::geom_text_repel(data = dt[income!="LIC"], 
+#                              aes(label = code2name(iso3c)), 
+#                              show.legend = FALSE)
+#   
+#   ggsave(paste0(i, "gdppc_scatter_income.pdf"),
+#          plot,
+#          width = 10,
+#          height = 7)
+#   
+#   plot <- ggplot(dt, aes(
+#     x = excess,
+#     y = eval(as.name(i)),
+#     color = income
+#   )) + 
+#     geom_point() +
+#     my_custom_theme +
+#     scale_color_custom +
+#     labs(y = i, x = "Excess Mortality") + 
+#     scale_x_log10(labels = scales::pretty_breaks(n = 6),
+#                   breaks = breaks_log(n = 6))
+#   
+#   ggsave(paste0(i, "excess_mort_scatter_income.pdf"),
+#          plot,
+#          width = 7,
+#          height = 5)
+# }
+# 
+# 
+# # Check WHO ---------------------------------------------------------------
+# 
+# # compare with our data:
+# load("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input/index_convergence.RData")
+# 
+# setwd(paste0(raw_dir, "/who_check"))
+# 
+# dli <- dir()
+# dli <- lapply(dli, read_xlsx)
+# dli <- rbindlist(dli, fill = T)
+# check_dup_id(dli, c("YEAR", "ANTIGEN", "COVERAGE"))
+# dli <- dli[,.(year = YEAR, 
+#               antigen = ANTIGEN, 
+#               desc = ANTIGEN_DESCRIPTION, 
+#               coverage = COVERAGE)]
+# 
+# fix_countries <- setDT(fix_countries)[,
+#                       .(label, year, meanval = w.meanval)][order(label)]
+# 
+# temp_bridge <- fread("desc	label
+# BCG	
+# DTP-containing vaccine, 3rd dose	Diptheria
+# DTP-containing vaccine, 3rd dose	Tetanus
+# DTP-containing vaccine, 3rd dose	Pertussis
+# Hib3	Hib
+# HepB3	Hepb
+# HPV VACCINATION PROGRAM COVERAGE - FIRST DOSE - FEMALES Target population who received the first dose of HPV vaccine in the reporting year	HPV
+# HPV Vaccination coverage by age 15, complete schedule, females	HPV
+# Measles-containing vaccine, 2nd dose	Measles
+# Pneumococcal conjugate vaccine, final dose	Pneumococcal
+# Inactivated polio-containing vaccine, 1st dose	
+# Polio, 3rd dose	Polio
+# Protection at birth (PAB) against neonatal tetanus	Tetanus
+# Rotavirus, last dose	Rotavirus
+# Rubella-containing vaccine, 1st dose	Rubella
+# Yellow fever vaccine	
+# ")
+# 
+# dli <- merge(dli, temp_bridge, by = "desc", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all()
+# fix_countries <- merge(fix_countries, temp_bridge, by = "label", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
+# check <- merge(fix_countries, dli, by = c("desc", "label", "year"))
+# plot <- ggplot(check,
+#        aes(
+#          x = coverage,
+#          y = meanval,
+#          color = label,
+#          group = label,
+#          label = year
+#        )) + geom_point() +
+#   labs(x = "WHO", y = "Our Estimate", title = "Global Estimates of Vaccine Coverage") +
+#   my_custom_theme +
+#   geom_abline(intercept = 0,
+#               slope = 1,
+#               size = 0.5) + 
+#   coord_cartesian(ylim = c(0, 100), xlim = c(0, 100)) + 
+#   geom_text_repel(show.legend = FALSE) + 
+#   scale_color_custom
+# 
+# setwd(input_dir)
+# ggsave("global_estimates_comparison2.pdf", plot)
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
