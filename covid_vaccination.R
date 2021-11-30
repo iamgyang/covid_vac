@@ -532,6 +532,30 @@ df_disease_avg <-
       perc_pop = sum(na.omit(perc_pop), na.rm = T)), 
      by = c("year", "disease")] %>% dfdt()
 
+# Create a table that shows the global coverage estimates by INCOME too:
+df_disease_avg_income <- 
+  df[, .(coverage = weighted_mean(coverage, poptotal, na.rm = T),
+         num_c = length(unique(iso3c)),
+         perc_pop = sum(na.omit(perc_pop), na.rm = T)), 
+     by = c("year", "disease", "income")] %>% dfdt()
+
+# Check that in each year, we're looking at the total global population:
+df_disease_avg_income <- df_disease_avg_income[!is.na(income)]
+df_disease_avg_income[,perc_glob_pop:=sum(perc_pop, na.rm = T), by = .(year, disease)]
+waitifnot(nrow(df_disease_avg_income[abs(perc_glob_pop-1)>0.0000001])==0)
+
+# Merge the two:
+df_disease_avg[,income:="Global"]
+df_disease_avg <- 
+  rbindlist(
+    list(
+      df_disease_avg, 
+      df_disease_avg_income
+    ), fill = T
+  )
+
+df_disease_avg$perc_glob_pop <- NULL
+
 # *****PORT OVER TO CHAT******* ----------------------------------------
 
 custom_title <- function(x) {
