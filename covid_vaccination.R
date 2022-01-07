@@ -1,11 +1,6 @@
 # To do:
 
-# make sure that the allow.cartesian turned out ok with the vaccine schedule
-
-# do we want to get the IRON levels from NMC as opposed to CHAT? 
-# https://correlatesofwar.org/data-sets/national-material-capabilities
-
-# change to historical income groups instead of current income groups
+# Need to change the y axis of the comparing UK with developing world graph...go back to waht it was before (something about DPT)
 
 rm(list = ls()) # clear the workspace
 
@@ -36,6 +31,7 @@ output_dir <- paste0(root_dir, "output")
 code_dir <- paste0(root_dir, "code")
 raw_dir <- paste0(root_dir, "raw_data")
 chat_dir <- paste0("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input")
+overleaf_dir <- paste0("C:/Users/", user, "/Dropbox/Apps/Overleaf/Covid Rollout Historical")
 setwd(raw_dir)
 
 # Packages ---------------------------------------------------------------
@@ -48,7 +44,7 @@ setwd(raw_dir)
     "leaps", "bestglm", "dummies", "caret", "jtools", "huxtable", "haven", "ResourceSelection",
     "betareg", "quantreg", "margins", "plm", "collapse", "kableExtra", "tinytex",
     "LambertW", "scales", "stringr", "imputeTS", "shadowtext", "pdftools", "glue",
-    "purrr", "OECD", "RobustLinearReg", "forcats", "WDI", "xlsx", "googlesheets4", "RCurl")
+    "purrr", "OECD", "RobustLinearReg", "forcats", "WDI", "xlsx", "googlesheets4", "RCurl", "readxl", "httr")
 }
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
@@ -64,11 +60,29 @@ theme_set(theme_clean() +
 # source(paste0(root_dir, "code/", "helper_functions.R"))
 source(paste0("C:/Users/", user, "/Dropbox/Coding_General/personal.functions.R"))
 
+custom_title <- function(x) {
+  gsub("(^|[[:space:]])([[:alpha:]])", 
+       "\\1\\U\\2",
+       x,
+       perl = TRUE)
+}
+
+var2oleaf <- function(some_variable, name = deparse(substitute(some_variable))) {
+  name_of_file <- paste0(overleaf_dir,"/", name, ".txt")
+  cat(some_variable, file = name_of_file)
+}
+
 # HPV Global Cancer Observatory ------------------------------------
 
-# Global Cancer Observatory data on vaccinations
-GCO_hpv <-
-  readxl::read_xlsx('wuenic2020_hpv-estimates.xlsx') %>% as.data.table()
+# Global Cancer Observatory data on vaccinations (from UNICEF)
+# https://data.unicef.org/resources/dataset/immunization/
+
+url1<-'https://data.unicef.org/wp-content/uploads/2021/07/wuenic2020_hpv-estimates.xlsx'
+GET(url1, write_disk(tf <- tempfile(fileext = ".xlsx")))
+GCO_hpv <- readxl::read_xlsx(tf) %>% as.data.table()
+
+# GCO_hpv <-
+  # readxl::read_xlsx('wuenic2020_hpv-estimates.xlsx') %>% as.data.table()
 
 GCO_hpv <-
   GCO_hpv[, .(iso3c, year, vaccine, coverage, vaccine_desc)]
@@ -77,8 +91,10 @@ GCO_hpv <-
     'Target population who received the first dose of HPV vaccine in the reporting year',
     'Target population who received the last dose of HPV vaccine in the reporting year'
   )]
-GCO_hpv[vaccine_desc == 'Target population who received the first dose of HPV vaccine in the reporting year', HPV_type := "first"]
-GCO_hpv[vaccine_desc == 'Target population who received the last dose of HPV vaccine in the reporting year', HPV_type := "last"]
+GCO_hpv[vaccine_desc == 'Target population who received the first dose of HPV vaccine in the reporting year', 
+        HPV_type := "first"]
+GCO_hpv[vaccine_desc == 'Target population who received the last dose of HPV vaccine in the reporting year', 
+        HPV_type := "last"]
 GCO_hpv$vaccine_desc <- NULL
 check_dup_id(GCO_hpv, c("HPV_type", "year", "iso3c"))
 
@@ -144,7 +160,7 @@ flu_df[,coverage:=coverage/1000]
 flu_df[,notes:="doses per per capita"]
 flu_df$vaccine <- "flu"
 
-# flu vaccination OECD ---------------------------------------------------------
+# Flu vaccination OECD ---------------------------------------------------------
 # https://data.oecd.org/healthcare/influenza-vaccination-rates.htm
 setwd(paste0(raw_dir, "/influenza_oecd/"))
 flu_df_oecd <- fread("DP_LIVE_02112021182435555.csv")
@@ -173,8 +189,9 @@ yf_df$year <- yf_df$year %>% gsub("[^\\d]+", "", ., perl = T) %>% as.numeric()
 yf_df <- as.data.table(yf_df)
 yf_df <- yf_df[, .(value = weighted_mean(value, total_population_2016, na.rm = T)), by = c("iso3c", "year")]
 yf_df <- yf_df[order(iso3c, year)]
-yf_df <- yf_df[, .(iso3c, year, coverage = value)]
+yf_df <- yf_df[, .(iso3c, year, coverage = value*100)]
 yf_df$vaccine <- "yellow fever"
+yf_df$source <- "Dryad"
 
 # Manually gathered data --------------------------------------------------
 
@@ -264,6 +281,7 @@ yf_risk <- yf_risk %>% dfdt()
 yf_risk <- yf_risk[!is.na(country)]
 yf_risk[, iso3c:=name2code(country)]
 yf_risk <- yf_risk[!is.na(iso3c)]
+
 # these are the countries where there is yellow fever risk
 yf_iso3c <- yf_risk[yf_risk=="Yes"]$iso3c
 
@@ -309,8 +327,10 @@ waitifnot(df_covid$iso_code==df_covid$iso_check)
 df_covid <- 
   df_covid[,.(iso3c = iso_code, date, 
               cov = people_fully_vaccinated_per_hundred)]
+              # people_vaccinated_per_hundred
 df_covid$cov <- as.numeric(df_covid$cov)
 df_covid <- df_covid[!is.na(cov)]
+df_covid_mo <- df_covid %>% as.data.frame() %>% as.data.table()
 df_covid <- df_covid[,.(coverage = max(na.omit(cov), na.rm = T)), 
                      by = .(iso3c, year = lubridate::year(date))]
 df_covid <- df_covid[!grepl("OWID", df_covid$iso3c),]
@@ -368,8 +388,11 @@ mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n',
         'weo_gdppc', 'weo_gdppc_gr')):=NULL]
 mad <- mad[order(iso3c, year)]
 
+setwd(input_dir)
 save.image("pre_merge.RData")
+
 # Merge -------------------------------------------------------
+
 load("pre_merge.RData")
 
 # merge them all together
@@ -410,25 +433,35 @@ df <- merge(df, vac_disc, by = c("disease"), all.x = T) %>% dfdt()
 # Merge in GDP
 df <- merge(df, mad, by = c("iso3c", "year"), all.x = T) %>% dfdt()
 
+setwd(input_dir)
 save.image("post_merge.RData")
+
+
 # Adjustments -------------------------------------------------------------
+setwd(input_dir)
 load("post_merge.RData")
+
+# ! We take the Yellow Fever data from 'Dryad' (Shearer et. al.'s untargeted 
+# unbiased estimates of vaccination coverage), as opposed to from the WHO data,
+# since Shearer's data encompasses the WHO data.
+df <- df[!(disease=="yellow fever" & (source=="WHO/UNICEF")) | is.na(source)]
+waitifnot("Dryad" == df[disease =="yellow fever"]$source %>% unique())
 
 # adjust vaccine names (some are purposely changed to other names to merge the
 # series)
-df[vaccine == "DTP 1st dose", vaccine:= "DTP1"]
-df[vaccine == "DTP 2nd dose", vaccine:= "DTP2"]
-df[vaccine == "DTP 3rd dose", vaccine:= "DTP3"]
-df[vaccine == "Tet Tox / DTaP/Tdap", vaccine:= "DTP3"]
-df[vaccine == "MCV1", vaccine:= "MCV1"]
-df[vaccine == "measles", vaccine:= "MCV1"]
-df[vaccine == "Measles", vaccine:= "MCV1"]
-df[vaccine == "Polio 1st dose", vaccine:= "POL1"]
-df[vaccine == "Polio 2nd dose", vaccine:= "POL2"]
-df[vaccine == "Polio 3rd dose", vaccine:= "POL3"]
-df[vaccine == "ROTAC", vaccine:= "RCV1"]
-df[vaccine == "Smallpox", vaccine:= "smallpox"]
-df[vaccine == "yellow fever", vaccine:= "YFV"]
+df[vaccine == "DTP 1st dose", vaccine := "DTP1"]
+df[vaccine == "DTP 2nd dose", vaccine := "DTP2"]
+df[vaccine == "DTP 3rd dose", vaccine := "DTP3"]
+df[vaccine == "Tet Tox / DTaP/Tdap", vaccine := "DTP3"]
+df[vaccine == "MCV1", vaccine := "MCV1"]
+df[vaccine == "measles", vaccine := "MCV1"]
+df[vaccine == "Measles", vaccine := "MCV1"]
+df[vaccine == "Polio 1st dose", vaccine := "POL1"]
+df[vaccine == "Polio 2nd dose", vaccine := "POL2"]
+df[vaccine == "Polio 3rd dose", vaccine := "POL3"]
+df[vaccine == "ROTAC", vaccine := "RCV1"]
+df[vaccine == "Smallpox", vaccine := "smallpox"]
+df[vaccine == "yellow fever", vaccine := "YFV"]
 
 # within each disease, get the vaccine that has the longest time series coverage
 long_series <- na.omit(df[,.(cov = length(na.omit(coverage))),by = .(disease, vaccine)])
@@ -436,7 +469,11 @@ long_series[,mc:=max(cov),by = .(disease)]
 long_series <- long_series[mc==cov][order(vaccine, decreasing = TRUE)][order(disease, decreasing = TRUE)]
 long_series <- long_series[,n1:=1][,n2:=cumsum(n1), by = .(disease)][n2==1]
 long_series <- long_series[,.(disease, vaccine, keep = n1)]
+long_series[disease %in% c("tetanus", "diphtheria","pertussis"), vaccine:="DTP3"]
 check_dup_id(long_series, "disease")
+df <- merge(df, long_series, by = c("disease", 'vaccine'), all = T)
+df <- df[keep == 1]
+df[, keep := NULL]
 
 # Divide Africa 1968 data by 0.22 to get estimated childhood vaccination rate. 
 # This means that we would assume that all those vaccines are going to children.
@@ -446,11 +483,7 @@ df[notes == "denominator is total population", coverage := min(coverage/0.22, 10
 # for flu vaccination coverage in people above 65.
 df <- df[notes!="doses per per capita"|is.na(notes)]
 
-# Get the maximum coverage per year-disease-country. e.g. Say the combination
-# vaccine coverage was greater than the individual one. But you're
-# right-probably doesn't happen too often (if at all).will let you know once
-# I've matched the data. Should we take a country-year maximum of each
-# vaccine? E.g. let's say we have the DTP vaccine coverage and the Pertussis
+# Get the maximum coverage per year-disease-country. e.g. let's say we have the DTP vaccine coverage and the Pertussis
 # vaccine coverage available for Nigeria. One is at 80%, another is at 50%.
 # For all of pertussis, diptheria, and tetanus, we'd set the coverage rate to
 # be 80%.
@@ -498,12 +531,83 @@ check_dup_id(df, c("iso3c","year", "disease"))
 df[,glob_pop:=sum(na.omit(poptotal), na.rm = T), by = .(year, disease)]
 df[,perc_pop:=poptotal/glob_pop]
 
+setwd(input_dir)
 save.image("prior to replacing w zero.RData")
 load("prior to replacing w zero.RData")
 
-# IF THE COVERAGE IS MISSING, REPLACE WITH 0! (checked that this is what WHO
-# does with their data when estimating coverage)
-df[is.na(coverage), coverage:=0]
+# For each disease, get the years where there is AT LEAST 1 country 
+# with coverage estimates:
+dis_yr <- 
+  distinct(na.omit(df[,.(iso3c, year, coverage, disease)])[,.(disease, year)])
+
+df <- merge(dis_yr, df, all.x = T, by = c("disease", "year"))
+
+setwd(input_dir)
+save.image("adjustments.RData")
+
+# Summary Statistics about data coverage: ----------------------------
+# for each disease, how many countries do we have?
+
+setwd(input_dir)
+load("adjustments.RData")
+
+# first year coverage is >40%:
+
+a <- dfdt(df)
+a <- a[order(disease,iso3c,year)]
+a[!is.na(coverage), minyr := min(year), by = c("disease", "iso3c")]
+a <- a[year==minyr]
+check_dup_id(a, c("disease","iso3c"))
+cat("across ___ diseases")
+a$disease %>% unique() %>% length()
+cat("across ___ countires")
+a$iso3c %>% unique() %>% length()
+cat("across ___ country-diseases")
+a %>% nrow()
+cat("we have ___ cases where the FIRST coverage is >40%")
+sum(a$coverage>40)
+
+# graph of coverage for each disease:
+
+# percent of population that we have data for:
+df[is.na(coverage), perc_pop_prior_zero := 0]
+df[!is.na(coverage), perc_pop_prior_zero := perc_pop]
+
+dta_avail_df <-
+  distinct(df[, .(
+    perc_pop_prior_zero = sum(perc_pop_prior_zero, na.rm = T)),
+    by = .(disease, year, glob_pop)])
+
+# check that we have the right population end result for the 
+# YF endemic countries
+a <-
+  pop[iso3c %in% intersect(yf_iso3c, who_keep_iso3c) & year == 2016] %>% dfdt()
+check_dup_id(a, "iso3c")
+waitifnot(abs(sum(a$poptotal) -
+                dta_avail_df[disease == "yellow fever" &
+                               year == 2016]$glob_pop) == 0)
+setwd(input_dir)
+
+# capitalize names of diseases
+dta_avail_df[,disease:=unlist(lapply(disease, custom_title))]
+
+# make plot
+plot <- dta_avail_df %>%
+  ggplot(.,
+         aes(
+           x = year,
+           y = perc_pop_prior_zero,
+           group = disease,
+           color = disease
+         )) +
+  geom_line(size = 1) +
+  my_custom_theme +
+  scale_color_custom +
+  labs(y = "Percent of Population\nwith Data Available", x = "")
+
+setwd(overleaf_dir)
+ggsave("line_coverage_plot.pdf", plot, width = 8, height = 5)
+setwd(input_dir)
 
 # Make sure that the microbe ID, licensing year, schedule year, 
 # and income is filled:
@@ -525,18 +629,36 @@ df <- df %>%
   as.data.frame() %>%
   as.data.table()
 
-# Create a table that shows the global coverage estimates:
+# IF THE COVERAGE IS MISSING, REPLACE WITH 0! (checked that this is what WHO
+# does with their data when estimating coverage)
+
+df[is.na(coverage), coverage := 0]
+
+# Create a table that shows the global coverage estimates.
+# First get a population that we use specifically for this purpose:
+df[disease == "influenza", pop_wm := pop_t_ge65]
+df[disease == "HPV", pop_wm := pop_f_le15]
+df[disease == "yellow fever", pop_wm := poptotal]
+df[disease != "influenza" & 
+     disease != "HPV" & 
+     disease != "yellow fever", pop_wm := pop_t_le1]
+df[disease == "covid-19", pop_wm := poptotal]
+
 df_disease_avg <- 
-  df[, .(coverage = weighted_mean(coverage, poptotal, na.rm = T),
+  df[, .(coverage = weighted_mean(coverage, pop_wm, na.rm = T),
       num_c = length(unique(iso3c)),
-      perc_pop = sum(na.omit(perc_pop), na.rm = T)), 
+      perc_pop = sum(na.omit(perc_pop), na.rm = T),
+      w_stdev = w.sd(coverage, pop_wm)
+      ), 
      by = c("year", "disease")] %>% dfdt()
 
 # Create a table that shows the global coverage estimates by INCOME too:
 df_disease_avg_income <- 
-  df[, .(coverage = weighted_mean(coverage, poptotal, na.rm = T),
+  df[, .(coverage = weighted_mean(coverage, pop_wm, na.rm = T),
          num_c = length(unique(iso3c)),
-         perc_pop = sum(na.omit(perc_pop), na.rm = T)), 
+         perc_pop = sum(na.omit(perc_pop), na.rm = T),
+         w_stdev = w.sd(coverage, pop_wm)
+         ), 
      by = c("year", "disease", "income")] %>% dfdt()
 
 # Check that in each year, we're looking at the total global population:
@@ -556,42 +678,154 @@ df_disease_avg <-
 
 df_disease_avg$perc_glob_pop <- NULL
 
-# *****PORT OVER TO CHAT******* ----------------------------------------
-
-custom_title <- function(x) {
-  if (toupper(x) == x ) {x
-  } else {
-    str_to_title(x)
-  }
-}
 setwd(input_dir)
-save.image("input_dir.RData")
+save.image("summ_stats.RData")
 
-port_chat <-
-  df[, .(
-    iso3c,
-    date = year,
-    variable = disease,
-    value = coverage,
-    check.count = 1,
-    categ = c("Vaccine--Covid Paper"),
-    label = lapply(disease, custom_title),
-    pop = poptotal,
-    pop_f_le15, 
-    pop_t_le1, 
-    pop_t_ge65, 
-    pop_t_l60,
-    gdppc
-  )] %>% dfdt()
 
-setwd(chat_dir)
-TAKE_ME_BACK_DIR <- input_dir
-rm(list=setdiff(ls(), c("port_chat", "TAKE_ME_BACK_DIR", "pop", "df_disease_avg", "who_keep_iso3c")))
-save.image("port_CHAT.RData")
-setwd(TAKE_ME_BACK_DIR)
-load("input_dir.RData")
 
-# Table: above 75% & 53% coverage ----------------------------------
+# RANDOM STATS ------------------------------------------------------------
+
+setwd(input_dir)
+load("summ_stats.RData")
+
+
+# subsaharan africa fully vaccinated %:
+# OECD fully vaccinated date:
+j <- df_covid %>% dfdt()
+j[,region:=countrycode(iso3c, "iso3c", "region")]
+j <- merge(j, pop, by = c('iso3c', 'year'), all.x = T)
+j <- j[,.(iso3c, year, coverage, region, pop = poptotal)]
+oecd_names <- c("AUSTRALIA","AUSTRIA","BELGIUM","CANADA","CHILE","COLOMBIA","COSTA RICA","CZECH REPUBLIC","DENMARK","ESTONIA","FINLAND","FRANCE","GERMANY","GREECE","HUNGARY","ICELAND","IRELAND","ISRAEL","ITALY","JAPAN","KOREA","LATVIA","LITHUANIA","LUXEMBOURG","MEXICO","NETHERLANDS","NEW ZEALAND","NORWAY","POLAND","PORTUGAL","SLOVAK REPUBLIC","SLOVENIA","SPAIN","SWEDEN","SWITZERLAND","TURKEY","UNITED KINGDOM","UNITED STATES")
+
+j <- j[iso3c%in%name2code(oecd_names) | 
+         region == "Sub-Saharan Africa"]
+
+
+# manually fill in Czech Republic because it's missing:
+# https://www.worldometers.info/world-population/czech-republic-population/
+j[iso3c == "CZE", pop:=10737322]
+
+waitifnot(nrow(j[iso3c == name2code("South Africa")])>=1)
+waitifnot(nrow(j[iso3c == name2code("Egypt")])==0)
+waitifnot(nrow(j[iso3c == name2code("Chile")])>=1)
+
+j[region!="Sub-Saharan Africa",region:="OECD"]
+j <- j[,.(coverage = weighted_mean(coverage, pop, na.rm = T)), by = region]
+
+# SubSaharan Africa Coverage
+j[region=="Sub-Saharan Africa",]$coverage
+# OECD coverage
+j[region=="OECD",]$coverage
+
+# Global # fully vaccinated 
+j <- df_covid %>% dfdt()
+j <- merge(j, pop, by = c('iso3c', 'year'), all.x = T)
+j <- na.omit(j[year == 2021,.(iso3c, coverage, poptotal)])
+j[,(sum((coverage/100)*poptotal, na.rm = T))]/(10^9)
+
+# Global coverage:
+j <- merge(j, wb_income, by = "iso3c")
+j[income == "LIC"|income == "LMIC"][order(poptotal)][coverage<40] %>% nrow()
+j[income == "HIC"][order(poptotal)][coverage>=40] %>% nrow()
+
+# time between COVID vaccine dev and 20% coverage: ---
+j <- merge(CJ(iso3c = unique(df_covid_mo$iso3c), date = unique(df_covid_mo$date)), 
+           df_covid_mo, all.x = T, by = c("iso3c", "date"))
+j <- merge(j, pop[year == 2021,.(iso3c, poptotal)], by = "iso3c", all = T)
+j <- j[order(iso3c, date)]
+
+# fill downwards the missing data:
+j <- j %>%
+  group_by(iso3c) %>%
+  fill(cov, .direction = "down") %>% 
+  dfdt()
+j[is.na(cov), cov:=0]
+
+# earliest date for 20% coverage
+j <- j[, .(cov = weighted_mean(cov, poptotal, na.rm = T)), by = c("date")]
+date_20 <- j[cov>20]$date %>%na.omit %>%  min()
+
+# Months between this date and FDA first vaccine EUA approval: The first EUA,
+# issued Dec. 11, for the Pfizer-BioNTech COVID-19  Vaccine for individuals 16
+# years of age and older was based on safety and effectiveness data from a
+# randomized, controlled, blinded ongoing clinical trial of thousands of
+# individuals.
+as.numeric((as.Date(date_20) - as.Date("2020-12-11"))/31)
+
+setwd(input_dir)
+save.image('prior_to_graphs_tables.RData')
+load('prior_to_graphs_tables.RData')
+
+# GRAPHS AND TABLES -------------------------------------------------------
+
+# Line: UK/Developing World across time ----------------------------
+
+toplot <- df[disease %in% c("diphtheria", "polio"),.(income, iso3c, coverage, year, disease, pop_t_le1)]
+toplot <- toplot[income == "LIC" | income == "LMIC" |
+                   iso3c == "GBR"]
+
+# in 1974 it is estimated that fewer than 5% of children in developing
+# countries were receiving a third dose of DTP and poliomyelitis diseases in
+# their first year of life
+addendum <- fread(
+  "dev_uk	coverage	year	disease
+Developing World 	0	1948	POL3
+UK	0	1948	POL3
+Developing World 	0	1955	DTP3
+UK	0	1955	DTP3
+UK	65	1964	POL3
+UK	70	1964	DTP3
+Developing World 	5	1974	POL3
+Developing World 	5	1974	DTP3
+"
+)
+
+toplot <-
+  toplot %>% as.data.frame() %>%
+  dplyr::select(iso3c, year, coverage, disease, pop_t_le1) %>%
+  mutate(dev_uk = case_when(iso3c == "GBR" ~ "UK",
+                            iso3c != "GBR" ~ "Developing World")) %>%
+  group_by(dev_uk, year, disease) %>%
+  summarise(coverage = weighted_mean(coverage, pop_t_le1)) %>%
+  rbind(as.data.frame(addendum))
+check_dup_id(toplot, c("dev_uk", "year", "disease"))
+
+toplot <- toplot %>%
+  mutate(disease = case_when(disease == "diphtheria" ~ "DTP",
+                             disease == "polio" ~ "Polio",
+                             disease == "DTP3" ~ "DTP",
+                             disease == "POL3" ~ "Polio"))
+
+plot <- toplot %>%
+  filter(year !=1978) %>% 
+  ggplot(.,
+         aes(
+           x = year,
+           y = coverage,
+           group = interaction(disease, dev_uk, sep = " "),
+           color = interaction(disease, dev_uk, sep = " ")
+         )) +
+  geom_point(data = setDT(toplot)[year == 2020], show.legend = FALSE) +
+  geom_line() +
+  my_custom_theme +
+  scale_color_custom +
+  labs(y = "", x = "") +
+  scale_x_continuous(breaks = seq(1970, 2020, 10),
+                     limits = c(1970, 2020))+
+  # size of legend
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  theme(legend.key.size = unit(3, 'mm')) +
+  theme(legend.key.width = unit(2.5,"mm"))
+
+setwd(overleaf_dir)
+ggsave("line_uk_dev.pdf",
+       plot,
+       width = 7,
+       height = 5)
+setwd(input_dir)
+
+
+# Table: 20, 40, 75% coverage ---------------------------------------------
 
 # what year for each disease did we achieve XYZ% coverage?
 cov_targets <- c(20, 40, 75)
@@ -619,14 +853,30 @@ for (i in unique(disease_accomplish_out$income)) {
 }
 }
 
+# replace infinite values with finite ones:
+invisible(lapply(names(disease_accomplish_out),function(.name) set(disease_accomplish_out, which(is.infinite(disease_accomplish_out[[.name]])), j = .name,value =NA)))
+
 # pivot wider:
 disease_accomplish_out <- disease_accomplish_out %>% spread(., coverage, year)
 
 # for the following graph we're only interested in global estimates:
 disease_accomplish <- as.data.table(disease_accomplish_out[income == "Global"])
 disease_accomplish$income <- NULL
+options(knitr.kable.NA = '')
+# make table presentable:
+kbl_20_75 <- disease_accomplish %>% 
+  mutate(disease = unlist(lapply(disease, custom_title))) %>% 
+  rename_with(str_to_title) %>% 
+  kbl("latex", booktabs = T, 
+      caption = "Year world achieved a certain percent of vaccination",
+      label = "table:kbl_20_75") %>%
+  kable_styling(latex_options = "striped", position = "center")
 
-# Line graph for microbe ID -----------------------------------------------
+setwd(overleaf_dir)
+save_kable(kbl_20_75, "kbl_20_75.tex", header = FALSE)
+setwd(input_dir)
+
+# Dot-Line: Microbe identify, vaccine produced -----------------------------------------------
 
 prog_df <-
   merge(disease_accomplish,
@@ -658,166 +908,600 @@ prog_df$disease <- prog_df$disease %>% lapply(., custom_title)
 prog_df[is.na(`75`), endpoint:= 2020]
 prog_df[!is.na(`75`), endpoint:= `75`]
 prog_df[disease=="Smallpox", endpoint:=1980]
+
+# STOP HERE ---------------------------------------------------------------
 write_sheet(prog_df, ss = "https://docs.google.com/spreadsheets/d/1fpwpesVd74Dr5eF4zK4RIMvKwOIGlsB1xeRPFVnWPdo/edit?usp=sharing", sheet = 1)
 
+
+# For infections with vaccines, excluding smallpox and Covid-19, the average
+# period between microbe isolation and vaccine development was [x] years.  For
+# vaccines that have reached a given milestone, the average time between
+# vaccine development and 20 percent global coverage was [x] years, 40 percent
+# coverage was [y] years and 75% coverage [z] years.  
+
+mean(unlist(prog_df[disease != "Covid-19" &
+    disease != "Smallpox"][, 
+    .(licensing - microbe_id)]), na.rm = T)
+mean(unlist(prog_df[disease != "Covid-19" &
+    disease != "Smallpox"][, 
+    .(`20` - licensing)]), na.rm = T)
+mean(unlist(prog_df[disease != "Covid-19" &
+    disease != "Smallpox"][, 
+    .(`40` - licensing)]), na.rm = T)
+mean(unlist(prog_df[disease != "Covid-19" &
+    disease != "Smallpox"][, 
+    .(`75` - licensing)]), na.rm = T)
+setwd(input_dir)
+save.image("graphs_prior_global_means.RData")
 # Gaps by income group between vaccine licensing and addition to schedule, 
-# then to reach 75 percent of target population------------------------------
+# Line: Global means and stdevs -------------------------------------------
+# restrict to be all from 0-100 on y axis and 1980-2020 on x axis:
+setwd(input_dir)
+load("graphs_prior_global_means.RData")
 
-discovery_df <- unique(df[,.(disease, licensing)])
-disease_accomplish_out <- 
-  merge(disease_accomplish_out, discovery_df, by = c("disease"))
+# restrict to be all from 0-100 on y axis and 1980-2020 on x axis:
 
-# replace values with years from discovery of vaccine to X% vaccinated for that 
-# income group:
-for (i in as.character(c(20, 40, 75))) {
-  disease_accomplish_out[,c(i):=eval(as.name(i))-licensing]
-  disease_accomplish_out <- disease_accomplish_out %>% as.data.table()
-}
-disease_accomplish_out <- disease_accomplish_out %>% 
-  pivot_longer(., cols = c(`20`:`75`), 
-               names_to = "cov", 
-               values_to = "yrs_from_disc") %>% 
-  mutate(disease = lapply(disease, custom_title) %>% unlist() %>% unlist()) %>% 
-  as.data.frame() %>% 
-  as.data.table()
+ggplot_restrictions <-
+  list(coord_cartesian(ylim = c(0, 105), xlim = c(1980, 2021)))
 
-plot <- disease_accomplish_out %>%
-  filter(cov == "20" & income != "Global") %>%
-  mutate(
-    disease = factor(disease, levels = 
-                       unique(disease_accomplish_out[
-                         income == "Global"][
-                           order(yrs_from_disc)]$disease))
-  ) %>% 
-  mutate(income = factor(income, levels = c("HIC", "UMIC", "LMIC", "LIC"))) %>% 
-  na.omit() %>% 
-  ggplot(.,
-         aes(
-           x = yrs_from_disc,
-           y = disease,
-           group = income,
-           fill = income,
-           shape = income
-         )) +
-  geom_point(
-    size = 5,
-    alpha = 0.7,
-    stroke = 2,
-    aes(color = income)
+# separate data-table to graph:
+jx <- df_disease_avg %>% dfdt()
+
+# prettify disease names:
+jx[,disease:=unlist(lapply(disease, custom_title))]
+
+# merge DTP vaccines together after checking that AFTER 1980, 
+# they indeed are the same.
+a <-jx[disease == "Pertussis" | disease == "Diphtheria" | disease == "Tetanus"]
+a$disease <- NULL
+a <- unique(a)
+waitifnot(nrow(unique(a[year>=1980]))==nrow(jx[disease=="Pertussis" & year>=1980]))
+jx[disease == "Pertussis" | disease == "Diphtheria" | disease == "Tetanus", 
+   disease:="DTP"]
+jx <- jx[!(disease=="DTP" & year <= 1980),]
+waitifnot(length(unique(jx$disease))==14)
+
+# Exclude smallpox b/c data only goes from pre-1970 and flu because 
+# data is also super patchy
+d2graf <- unique(jx$disease)
+d2graf <- setdiff(d2graf, c('Smallpox', 'Influenza'))
+
+# for diseases NOT COVID, delete 2021 data because it's so patchy:
+jx[year %in% c(2021) & disease != 'Covid-19', coverage := NA]
+jx[year %in% c(2021) & disease != 'Covid-19', w_stdev := NA]
+jx[year %in% c(2021) & disease != 'Covid-19', w_stdev := NA]
+jx[year %in% c(2021) & disease != 'Covid-19', coverage := NA]
+
+# For HPV, delete 2020 data because it's so patchy:
+# As of 11-18-2021, only 44 countries that we have HPV for in 
+# 2020 (compared to 22 and 54 for 2019, respectively).
+jx[year %in% c(2020) & disease %in% c('HPV'),
+   (c('coverage', 'w_stdev')) := NA]
+
+# make covid come last:
+jx$disease <- jx$disease %>%
+  factor(., levels = c(setdiff(sort(unique(jx$disease)), 'Covid-19'),'Covid-19'))
+
+plot <-
+  ggplot(jx[disease %in% d2graf & income == "Global"],
+         aes(x = year, group = disease, color = disease)) +
+  geom_line(aes(y = coverage, group = disease, color = disease)) +
+  geom_ribbon(
+    aes(
+      ymin = coverage - 1 * w_stdev,
+      ymax = coverage + 1 * w_stdev,
+      group = disease
+    ),
+    color = 'grey83',
+    alpha = 0.2
   ) +
   my_custom_theme +
-  theme(
-    axis.text.x = element_text(
-      angle = 0,
-      vjust = 0.5,
-      size = 12,
-      color = "grey57"
-    ),
-    axis.title.x = element_text(
-      angle = 0,
-      vjust = 0.5,
-      size = 12,
-      color = "grey57"
-    ),
-    axis.title.y = element_text(
-      angle = 0,
-      vjust = 0.5,
-      hjust = 1,
-      size = 12
-    ),
-    axis.text.y = element_text(
-      size = 12,
-      vjust = 0.5,
-      margin = unit(c(
-        t = 0,
-        r = 2,
-        b = 0,
-        l = 0
-      ), "mm"),
-      color = "black"
-    ),
-    axis.ticks.x = element_line(size = 0.5, color = "grey57"),
-    axis.line.x = element_line(size = 0.5, color = "grey57")
-  ) + 
-  scale_x_continuous(breaks = seq(0,100,10)) + 
-  scale_color_manual(values = c("#00677f", "#ffbf3f", "#693c5e", "#696158")) + 
-  labs(x = "Years since vaccine discovery to 20% coverage", y = "", subtitle = "")
+  labs(y = 'Coverage (%)', x = '') +
+  theme(legend.position = 'none') +
+  ggplot_restrictions +
+  facet_wrap(. ~ disease, scales = 'free') +
+  scale_color_custom
 
+setwd(overleaf_dir)
+ggsave(paste0('mean_w_stdev_facetted.pdf'),
+       plot,
+       width = 10,
+       height = 7)
 setwd(input_dir)
-ggsave("yrs_to_20_percent.png", plot, width = 9, height = 5)
 
-# write_sheet(df_income_disease, ss = "https://docs.google.com/spreadsheets/d/1cRYaM8cKGcFVTbCtvxttjOXpkH4iPLim2aYIYLdkSPw/edit?usp=sharing", sheet = 1)
-
-# Line: UK/Developing World across time ----------------------------
-
-load("post_merge.RData")
-toplot <- df[disease %in% c("diptheria", "tetanus", "pertussis", "polio")]
-toplot <- toplot[income=="LIC" | income=="LMIC" | iso3c == "GBR"]
-toplot <- toplot[vaccine %in% c("Polio 3rd dose", "POL3", "DTP3")]
-
-# in 1974 it is estimated that fewer than 5% of children in developing countries were receiving a third dose of DTP and poliomyelitis vaccines in their first year of life
-addendum <- fread("dev_uk	coverage	year	vaccine
-Developing World 	0	1948	POL3
-UK	0	1948	POL3
-Developing World 	0	1955	DTP3
-UK	0	1955	DTP3
-UK	65	1964	POL3
-UK	70	1964	DTP3
-Developing World 	5	1974	POL3
-Developing World 	5	1974	DTP3
-")
-
-toplot <- 
-  toplot %>% as.data.frame() %>%
-  dplyr::select(iso3c, year, coverage, vaccine, pop_t_le1) %>%
-  mutate(
-    dev_uk = case_when(iso3c == "GBR" ~ "UK",
-                       iso3c != "GBR" ~ "Developing World"),
-    vaccine = case_when(
-      vaccine == "Polio 3rd dose" ~ "POL3",
-      vaccine != "Polio 3rd dose" ~ vaccine
-    )
-  ) %>%
-  group_by(dev_uk, year, vaccine) %>%
-  summarise(coverage = weighted_mean(coverage, pop_t_le1)) %>%
-  rbind(as.data.frame(addendum))
-check_dup_id(toplot, c("dev_uk", "year", "vaccine"))
-# toplot <- toplot %>% 
-#   pivot_wider(names_from = c(vaccine, dev_uk), values_from = coverage)
-# 
-# names(toplot) <- names(toplot) %>% gsub("_", "" ,., fixed = T)
-# toplot <- toplot %>% dfdt()
-# toplot <- toplot[order(year)]
-# toplot[, names(toplot) := lapply(.SD, na_locf), .SDcols = names(toplot)]
-toplot <- toplot %>%
-  mutate(vaccine = case_when(vaccine == "DTP3" ~ "DTP",
-                             vaccine == "POL3" ~ "Polio"))
-
-plot <- toplot %>%
-  ggplot(.,
-         aes(
-           x = year,
-           y = coverage,
-           group = interaction(vaccine, dev_uk, sep = " "),
-           color = interaction(vaccine, dev_uk, sep = " ")
-         )) +
-  geom_point(data = setDT(toplot)[year == 2020], show.legend = FALSE) +
+# Line: Income group coverage over time ------------------------------
+jx[,income:=factor(income, levels = c("HIC", "UMIC", "LMIC", "LIC"))]
+plot <- ggplot(jx[disease %in% d2graf & income != "Global"],
+       aes(
+         x = year,
+         y = coverage,
+         color = income,
+         group = income
+       )) +
+  scale_x_continuous(limits = c(1980, 2021)) +
   geom_line() +
-  my_custom_theme +
+  facet_wrap( ~ disease) +
   scale_color_custom +
-  labs(y = "", x = "") +
-  theme(legend.key.size = unit(3, 'mm')) +
-  scale_x_continuous(breaks = seq(1970, 2020, 10), limits = c(1970, 2020))
+  my_custom_theme +
+  labs(y = "Coverage (%)", x = "") + 
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+      theme(legend.key.size = unit(3, 'mm')) +
+      theme(legend.key.width = unit(2.5,"mm"))
+setwd(overleaf_dir)
+ggsave("line_income.pdf", plot, width = 11, height = 6)
+setwd(input_dir)
 
-ggsave(
-  "Line - UK vs. Dev World.pdf",
-  plot,
-  width = 7,
-  height = 5,
-  limitsize = FALSE,
-  dpi = 1000
+# random stats:
+
+for (i in c("HIC", "UMIC", "LMIC", "LIC")) {
+  assign(paste0(tolower(i), "_meas_minyr"), 
+         min(jx[disease == "Measles" & coverage > 20 & income == i]$year, na.rm = T)
+         )
+}
+for (i in c("UMIC", "LMIC", "LIC")) {
+  assign(paste0(tolower(i), "_addtl_meas_yr"), 
+         eval(as.name(paste0(tolower(i), "_meas_minyr"))) - hic_meas_minyr
+  )
+}
+
+var2oleaf(hic_meas_minyr)
+var2oleaf(umic_addtl_meas_yr)
+var2oleaf(lmic_addtl_meas_yr)
+var2oleaf(lic_addtl_meas_yr)
+
+# get the covid coverage:
+h <- merge(CJ(iso3c = unique(df_covid_mo$iso3c), 
+              date = unique(df_covid_mo$date)), 
+              df_covid_mo, 
+              all.x = T, by = c("iso3c", "date"))
+h <- merge(h, pop[year == 2021,.(iso3c, poptotal)], by = "iso3c", all = T)
+
+# fill downwards the missing data:
+h <- h[order(iso3c, date)]
+h <- h %>%
+group_by(iso3c) %>%
+fill(cov, .direction = "down") %>% 
+dfdt()
+h[is.na(cov), cov:=0]
+h <- h[!is.na(date)]
+
+# income groups
+h <- merge(h,wb_income,by =c("iso3c"),all.x = T)
+
+# global coverage covid by income group:
+hii <-
+  h[, .(coverage = weighted_mean(cov, poptotal, na.rm = T)), by = c("income", "date")] %>%
+  na.omit %>% dfdt()
+
+# Line: Early stage COVID -------------------------------------------------------
+h <- h[,.(coverage=weighted_mean(cov, poptotal, na.rm = T)), by = "date"] %>% 
+     na.omit %>% dfdt()
+h[,year:=as.numeric(2021+(as.Date(date) - as.Date("2021-01-01"))/365)]
+h[,disease:="Covid-19"]
+
+
+# merge with average disease:
+j <- df_disease_avg[income == "Global"& 
+                      disease!="covid-19" & 
+                      disease!="Covid-19",
+                    .(disease, year, coverage)] %>% dfdt()
+j <- rbindlist(list(j, h), fill = T)
+
+j[,minyr:=min(year, na.rm = T), by = "disease"]
+j[,yr:=year-minyr]
+j[,disease:=unlist(lapply(disease, custom_title))]
+
+# exclude the last year of flu:
+j <- j[!(disease=="Influenza" & year == 2020)]
+
+j <- j[order(disease, yr)]
+j[,fin_yr:=max(yr),by = "disease"]
+j$date <- NULL
+j <- j %>% na.omit
+
+# checks:
+check_dup_id(j, c("disease", "yr"))
+a <- j$disease %>% unique() %>% length()
+waitifnot(a>10)
+
+
+for (i in c(1, 2)) {
+  if (i == 2) {
+    # first 3 years:
+    j <- j[yr <= 3]
+  }
+  set.seed(481494561)
+  plot <- j %>% filter(disease != "Covid-19") %>%
+    ggplot(., aes(x = yr, y = coverage, group = disease)) +
+    geom_line(color = "grey79") +
+    geom_line(
+      data = j[disease == "Covid-19"],
+      aes(x = yr, y = coverage),
+      color = "maroon",
+      size = 1
+    ) +
+    geom_point(
+      data = j[disease != "Covid-19" & yr == fin_yr],
+      aes(x = yr, y = coverage),
+      size = 1.3,
+      color = "grey79"
+    ) +
+    geom_point(
+      data = j[disease == "Covid-19" & yr == fin_yr],
+      aes(x = yr, y = coverage),
+      size = 2,
+      color = "maroon"
+    ) +
+    ggrepel::geom_text_repel(data = j[disease != "Covid-19" &
+      yr == fin_yr],
+      aes(x = yr, y = coverage, label = disease),
+      color = "grey79") +
+    ggrepel::geom_text_repel(data = j[disease == "Covid-19" &
+      yr == fin_yr],
+      aes(x = yr, y = coverage, label = disease)) +
+    my_custom_theme +
+    scale_color_custom +
+    labs(x = "Years from First Available Data", y = "Coverage (%)") +
+    # theme(text = element_text(family = "Tahoma")) +
+    scale_y_continuous(limits = c(0, 100))
+  
+  
+  setwd(overleaf_dir)
+  ggsave(paste0("line_early_covid", i, ".pdf"),
+         plot,
+         width = 8,
+         height = 5)
+  setwd(input_dir)
+}
+
+# Bar: Flu Measles Covid --------------------------------------------------
+# Palache, A., Rockman, S., Taylor, B., Akcay, M., Billington, J. K., & Barbosa, P. (2021). Vaccine complacency and dose distribution inequities limit the benefits of seasonal influenza vaccination, despite a positive trend in use. Vaccine, 39(41), 6081-6087.
+# Absolute number of seasonal influenza vaccine doses distributed - The total number of doses distributed in 2004 was approximately 262 million and this had risen to about 531 million in 2019, an overall 103% increase (Supplemental Fig. 1). However, compared to the peak number of doses distributed in 2014 of 534 million doses, the 2019 total represents a 0.3% decline. The overall growth in the number of doses distributed has largely been driven by the increase in absolute number of doses distributed in the Americas (AM) (a 154 million dose difference between 2004 and 2019).
+
+j <- df_disease_avg[income == "Global" & 
+               disease == "measles" & 
+               year %in% c(2019)]$coverage
+
+n_meas <- 
+  (j/100) * sum(df[disease == "measles" & 
+  year %in% c(2019)]$pop_wm, 
+  na.rm = T)
+
+n_flu <- 531 * 10^6
+
+j <- df_disease_avg[income == "Global" & 
+                      disease == "covid-19" & 
+                      year %in% c(2021)]$coverage
+
+n_covid <- 
+  (j/100) * sum(df[disease == "covid-19" & 
+  year %in% c(2021)]$pop_wm, 
+  na.rm = T)
+
+p <- data.table(
+  disease = c("Measles", "Flu", "Covid-19"),
+  n = c(n_meas, n_flu, n_covid)
 )
 
+# covid vaccinated is ___ x bigger than measles
+x_meas <- (n_covid/n_meas) %>% signif(2)
+setwd(overleaf_dir)
+write.table(x_meas, file = "x_meas.txt", sep = "",
+            row.names = FALSE, col.names = FALSE)
+
+# covid vaccinated is ___ x bigger than flu
+x_flu <- (n_covid/n_flu) %>% signif(2)
+setwd(overleaf_dir)
+write.table(x_flu, file = "x_flu.txt", sep = "",
+            row.names = FALSE, col.names = FALSE)
+setwd(input_dir)
+
+
+color_ordered <- 
+  c(
+    "#800000",
+    "#7B92A8",
+    "#693C5E",
+    "#008BBC",
+    "#1B365D",
+    "#97B6B0",
+    "#D7D29E",
+    "#ACA39A",
+    "#3E647D",
+    "#B6CFD0",
+    "#1A476F",
+    "#00677F",
+    "#6E8E84",
+    "#319B42",
+    "#DFD1A7",
+    "#FFBF3F",
+    "#E4002B",
+    "#9C8847",
+    "#90353B",
+    "#C10534",
+    "#938DD2",
+    "#BFA19C",
+    "#2D6D66",
+    "#696158",
+    "#CAC27E",
+    "#D6D2C4",
+    "#82C0E9",
+    "#DC4405"
+  )
+
+
+scale_color_custom <- 
+  list(
+    scale_color_manual(values = color_ordered),
+    scale_fill_manual(values = color_ordered)
+  )
+
+plot <- 
+  ggplot(p, aes(x = disease, y = n / (10 ^ 6), fill = disease)) +
+  geom_bar(position = "stack", stat = "identity") +
+  labs(x = "",
+       y = "Annual Doses\nDelivered (m)") +
+  scale_y_continuous(
+    breaks = scales::pretty_breaks(n = 13),
+    labels = scales::comma_format(accuracy = 1)
+  ) +
+  my_custom_theme + 
+  scale_color_custom + 
+  theme(legend.position = "none")
+
+setwd(overleaf_dir)
+ggsave("bar_num_doses.pdf", plot, width = 8, height = 5)
+setwd(input_dir)
+
+
+# https://www.who.int/data/gho/indicator-metadata-registry/imr-details/4756
+# Global and regional coverage is a weighted sum of WHO/UNICEF estimates of national coverage by target population from the United Nations Population Division's World Population Prospects. The size of the target population is the national annual number of infants surviving their first year of life. 
+
+
+
+# Line: Coefficient of variation across time -----------------------
+
+# get weighted mean
+fix_countries <-
+  df[, .(
+    w.meanval = weighted_mean(coverage, pop_wm, na.rm = TRUE),
+    w.stdev = w.sd(coverage, pop_wm)
+  ),
+  by = c("disease", "year")]
+fix_countries[, w.coef.var := w.stdev / w.meanval]
+
+# we drop smallpox because data is too patchy:
+fix_countries[,disease:=unlist(lapply(disease, custom_title))]
+fix_countries <- fix_countries[disease!="Smallpox" & disease != "smallpox"]
+waitifnot(any(na.omit(fix_countries$disease=="Covid-19")))
+
+# merge DPT again:
+fix_countries <- fix_countries[!(disease %in%c("Pertussis", "Tetanus"))]
+fix_countries[disease == "Diphtheria", disease:="DTP"]
+
+setwd(input_dir)
+save.image("index_convergence.RData")
+
+setwd(input_dir)
+load("index_convergence.RData")
+
+# plot convergence
+plot <-
+  # we drop Flu in 2020 data sample is very small and likely is the reason for the artificial drop in coverage
+  # (see Appendix figure where we plot data availability)
+  ggplot(data = na.omit(fix_countries[disease!="Covid-19" & !(disease == "Influenza" & year == 2020)]), 
+         aes(year, w.coef.var, 
+             group = disease, color = disease)) +
+  geom_line() +
+  geom_point(show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(1980, 2020, 10)) +
+  coord_cartesian(xlim = c(1980, 2021)) + 
+  labs(
+    x = "",
+    y = "Coefficient of Variation"
+  ) +
+  guides(color = guide_legend(ncol = 2, override.aes = list(size = 3))) +
+  my_custom_theme +
+  scale_color_custom
+  # scale_y_log10(breaks = breaks_log(n = 10),
+  #               labels = scales::comma_format(accuracy = 0.01)) + 
+  # annotation_logticks(sides = "l")
+
+setwd(overleaf_dir)
+ggsave(
+  paste0("coef_var_plot.pdf"),
+  plot,
+  width = 12,
+  height = 7
+)
+setwd(input_dir)
+
+# Between
+# 2000 and 2020, the weighted coefficient for HiB fell from {[}X{]} to
+# {[}Y{]}. For measles it fell from {[}X{]} to {[}Y{]}. For Covid-19
+# vaccination, the coefficient of variation was {[}X{]} in {[}date{]} and
+# dropped to {[}y{]} in {[}date{]}. {[}GY: how do we have two values for
+# Covid-19? when are they?{]}
+setwd(overleaf_dir)
+for (y in c(2000, 2020)) {
+  for (d in c("Measles", "Covid-19", "HiB")) {
+    assign(paste0("cv_", tolower(d), y),
+           fix_countries[disease == d][year == y]$w.coef.var %>%
+             signif(3))
+    cat(
+      eval(as.name(paste0("cv_", tolower(d), y))),
+      file = paste0("cv_", tolower(d), y, ".txt")
+    )
+  }
+}
+
+# Dot: Preston curve ----------------------------------
+setwd(input_dir)
+save.image("preston_curve.RData")
+
+setwd(input_dir)
+load("preston_curve.RData")
+
+jx <- df[, .(iso3c, year, coverage, disease)]
+# relabel DPT:
+a <-jx[disease == "pertussis" | disease == "diphtheria" | disease == "tetanus"]
+a$disease <- NULL
+a <- unique(a)
+waitifnot(nrow(unique(a[year>=1980]))==nrow(jx[disease=="pertussis" & year>=1980]))
+jx[disease == "pertussis",disease:="DTP"]
+jx <- jx[!(disease%in%c("tetanus", "diphtheria"))]
+jx <- jx[!(disease=="DTP" & year < 1980),]
+
+# for Preston curves, we do not want to plot HPV, Smallpox, or Flu:
+jx <- jx %>%
+  filter(
+    disease != "smallpox" &
+      # Didn't want flu or HPV because we never reached 20%
+      # global coverage.
+      disease != "influenza" &
+      disease != "HPV"
+  ) %>%
+  dfdt()
+
+# make sure that the min year has more than 20 countries in it,
+# and that we've achieved 20% vaccine coverage.
+jx[coverage!=0 ,n:=.N, by = .(disease, year)]
+a <- unique(na.omit(jx[,.(disease, year, n)]))
+a <- a[n>10]
+jx <- merge(a, jx, by = c("disease", "year"), all.x = T)
+df_disease_avg <- df_disease_avg[!(disease=="diphtheria"|disease=="pertussis")]
+df_disease_avg[disease=="tetanus", disease:="DTP"]
+
+df_disease_avg <- df_disease_avg %>% unique() %>% filter(year>=1980) %>% dfdt()
+jx <- merge(jx, df_disease_avg[income=="Global",.(year, 
+                                                  disease, 
+                                                  glob_c = coverage)],
+            by = c("disease", "year"), all.x = T)
+jx <- jx[glob_c>10]
+jx[,minyr:=min(year), by = .(disease)]
+jx[,maxyr:=max(year), by = .(disease)]
+jx <- jx[year == minyr|year==maxyr]
+
+# and remove any countries in the end year where it is 0.
+# do this by taking the difference between the end year and the start year, and seeing if that EQUALs negative the start year value.
+jx <- jx[order(disease, iso3c, year)]
+jx[,fdiff:=coverage - shift(coverage,n=1,type = "lead"),by = .(disease, iso3c)]
+jx <- jx[fdiff!=coverage | is.na(fdiff) | is.na(coverage)]
+
+# get a fixed sample of countries in the start and end years
+jx <- jx %>%
+  dplyr::select(disease, iso3c, coverage, year) %>%
+  pivot_wider(names_from = c(year), values_from = coverage) %>% 
+  dfdt()
+jx[, rsum := rowSums(!is.na(.SD)), 
+   .SDcols = setdiff(names(jx), c("disease", "iso3c", "gdppc"))]
+jx <- jx[rsum >= 2 | disease == "covid-19"]
+waitifnot(all(jx$rsum[jx$disease!="covid-19"]==2))
+jx <- jx %>% 
+  dplyr::select(-rsum) %>% 
+  pivot_longer(`1980`:`2016`, names_to = "year", values_to = "coverage") %>% 
+  na.omit %>% 
+  dfdt()
+
+# check we've removed the final year == 0 situation
+a <- jx %>% dfdt() 
+a[,maxyr:=max(year), by = .(disease, iso3c)]
+waitifnot(all(a[maxyr == year & disease!="covid-19" ]$coverage != 0))
+a <- NULL
+
+# make sure that HPV and Flu aren't included
+jx$disease %>% 
+  unique() %>% 
+  grepl("smallpox|hpv|influenza", ., ignore.case = T) %>% 
+  (function(x) {x==FALSE}) %>% 
+  all() %>% 
+  waitifnot()
+
+# Create variables for labeling the start and end
+jx[,minyr:=min(year), by = .(disease)]
+jx[,maxyr:=max(year), by = .(disease)]
+jx <- jx[year == minyr|year == maxyr]
+jx[year==minyr, year_lab:="Start"]
+jx[year==maxyr, year_lab:="End"]
+jx[,disease_lab:=paste0(disease, "\n(", minyr, " - ", maxyr, ")")]
+
+# make COVID-19 come last:
+jx$disease_lab <- jx$disease_lab %>% lapply(custom_title) %>% unlist()
+jx$disease_lab <- jx$disease_lab %>% 
+  factor(levels = c(unique(jx[disease != "covid-19"]$disease_lab), 
+                    unique(jx[disease == "covid-19"]$disease_lab)))
+
+# merge back in GDPPC:
+jx$year <- as.numeric(jx$year)
+mad$year <- as.numeric(mad$year)
+jx <- merge(jx, mad, by = c("year", "iso3c"), all.x = T)
+jx <- jx %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
+
+# graph:
+plot <- 
+  ggplot(jx, 
+         aes(x = gdppc, 
+             y = coverage, 
+             color = as.factor(year_lab), 
+             group = as.factor(year_lab))) + 
+  geom_point(show.legend = FALSE) + 
+  geom_smooth(
+    se = FALSE,
+    size = 0.4,
+    method = "lm",
+    formula = (y~x),
+    aes(
+      x = gdppc,
+      y = coverage,
+      group = as.factor(year_lab),
+      color = as.factor(year_lab)
+    )
+  ) + 
+  annotation_logticks(sides = "b") +
+  scale_x_continuous(labels=scales::dollar_format(), trans = "log10") + 
+  my_custom_theme + 
+  labs(y = "Coverage (%)", subtitle = "", x = "GDP per capita")+
+  scale_color_custom + 
+  guides(colour = guide_legend(override.aes = list(size = 3))) + 
+  facet_wrap(~disease_lab) + 
+  scale_y_continuous(breaks = seq(0,100,20)) + 
+  coord_cartesian(ylim = c(0, 100))
+
+setwd(overleaf_dir)
+ggsave(
+  paste0("point_preston_linear.pdf"),
+  plot,
+  width = 10,
+  height = 14,
+  limitsize = FALSE#,
+  # dpi = 400
+)
+setwd(input_dir)
+
+# data on Preston curves:
+preston_meas_yr_start <- jx[disease=="measles"]$minyr %>% unique() %>% as.numeric()
+preston_meas_yr_end <- jx[disease=="measles"]$maxyr %>% unique() %>% as.numeric()
+fit <- lm(coverage~gdppc, 
+          data = jx[disease == "measles" & year_lab == "Start"])
+pred <- predict(fit, data.frame(gdppc = c(1000,10000)))
+preston_meas_cov_poor_start <- pred[1] %>% signif(2)
+preston_meas_cov_rich_start <- pred[2] %>% signif(2)
+fit <- lm(coverage~gdppc, 
+          data = jx[disease == "measles" & year_lab == "End"])
+pred <- predict(fit, data.frame(gdppc = c(1000,10000)))
+preston_meas_cov_poor_end <- pred[1] %>% signif(2)
+preston_meas_cov_rich_end <- pred[2] %>% signif(2)
+hib_minyr <- jx[disease == "HiB"]$minyr %>% unique() %>% as.numeric()
+diff_hib_minyr <- hib_minyr-1987
+
+var2oleaf(preston_meas_yr_start)
+var2oleaf(preston_meas_yr_end)
+var2oleaf(preston_meas_cov_poor_start)
+var2oleaf(preston_meas_cov_rich_start)
+var2oleaf(preston_meas_cov_poor_end)
+var2oleaf(preston_meas_cov_rich_end)
+var2oleaf(hib_minyr)
+var2oleaf(diff_hib_minyr)
 
 # Dot - Bloomberg time to 75% vaccination: ----------------------------
 
@@ -858,7 +1542,7 @@ bloom[,iso3c:=name2code(country)]
 # GDP per capita:
 
 bloom <- merge(bloom, na.omit(df[year == 2021,.(gdppc, iso3c, poptotal)]), 
-      by = "iso3c", all = FALSE)
+               by = "iso3c", all = FALSE)
 bloom <- bloom[!is.na(gdppc)]
 
 # where coverage is above 75, put days to 75% coverage as 0:
@@ -867,268 +1551,58 @@ bloom[cov>=75, time_to_full_cov:=0]
 # get WB country groups:
 bloom[,region:=countrycode(iso3c, "iso3c", "region")]
 
-# Graph:
-setwd("C:/Users/user/Dropbox/CGD/Projects/covid_vaccination/input")
-plot <- ggplot(bloom,
-               aes(
-                 x = gdppc,
-                 y = time_to_full_cov,
-                 size = poptotal,
-                 color = region
-               )) +
-  geom_point(alpha = 0.5) +
-  scale_size_continuous(range = c(1, 20), guide = 'none') + 
+setwd(input_dir)
+save.image("prior_bloom_plot.RData")
+
+
+setwd(input_dir)
+load("prior_bloom_plot.RData")
+
+
+# label for population
+bloom[, lab_ := paste0(country, " (", signif(poptotal / 10 ^ 6, 2), "m)")]
+bloom <- bloom[order(-poptotal)]
+bloom[21:nrow(bloom),lab_:=NA]
+
+# time to full coverage should be in years
+bloom[, time_to_full_cov := (0.1+time_to_full_cov) / 365]
+
+plot <-
+  ggplot(bloom) +
+  geom_point(alpha = 0.5,
+             aes(
+               x = gdppc,
+               y = time_to_full_cov,
+               size = poptotal,
+               color = region
+             )) +
   my_custom_theme +
-  labs(y = "Days to 75% coverage",
+  labs(y = "Years to 75% coverage",
        x = "GDP per capita",
-       subtitle = "Points scaled to population size.") +
+       subtitle = "") +
   scale_color_custom +
-  scale_x_log10(labels = scales::dollar_format()) +
-  annotation_logticks(side = "b") +
-  guides(color = guide_legend(ncol = 2))
+  scale_y_log10(breaks = breaks_log(n = 10),
+                labels = scales::comma_format(accuracy = 0.01)) +
+  scale_x_log10(labels = scales::dollar_format(accuracy = 1),
+                breaks = breaks_log(n = 6)) +
+  annotation_logticks(side = "bl") +
+  guides(color = guide_legend(ncol = 2)) +
+  scale_size_area(max_size = 20, guide = "none") +
+  annotate(
+    "text",
+    x = 25000,
+    y = 0.001,
+    label = "Already at 75% coverage"
+  ) +
+  ggrepel::geom_text_repel(data = bloom,
+                           aes(x = gdppc, y = time_to_full_cov, label = lab_),
+                           size = 3, direction = "y",
+                           segment.color = "grey65")
 
-ggsave("dot_time_to_75_cov.png", plot)
+setwd(overleaf_dir)
+ggsave(paste0("dot_time_to_75_cov.pdf"),
+       plot,
+       width = 8,
+       height = 8)
+setwd(input_dir)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# 
-# # _____________________ ---------------------------------------------------
-# # _____________________ ---------------------------------------------------
-# # COVID Supply Chain Data -------------------------------------------------
-# setwd(raw_dir)
-# covsup <- readxl::read_xlsx("imf-who-covid-19-vaccine-supply-tracker.xlsx", 
-#                             sheet = 3)
-# names(covsup) <- 
-#   unlist(covsup[2,]) %>% 
-#   gsub("%", "perc", ., fixed = T) %>% 
-#   make.names() %>% 
-#   cleanname() %>% cleanname()
-# covsup <- covsup[3:nrow(covsup),] %>% dfdt()
-# tonum <- setdiff(names(covsup), c( "countries.and.areas", "iso3"))
-# covsup[,(tonum):=lapply(.SD, as.numeric), .SDcols = tonum]
-# 
-# # Variables to get: 
-# # ISO 3-digit country code
-# # Population
-# # 
-# # Final total secured and/or expected vaccine supply
-# # Vaccine needed to fully vaccinate 70% of the country or area's population
-# covsup <- covsup[, .(
-#   iso3c = iso3,
-#   pop = population,
-#   sec_cov = secured.and.or.expected.vaccine.perc.of.population.,
-#   needed = vaccine.needed.to.reach.70perc.of.population.millions.of.courses.,
-#   sec = secured.and.or.expected.vaccine.millions.of.courses.,
-#   bilat_cov = bilateral.deals.perc.of.population.,
-#   covax_cov = covax.total.perc.of.population.,
-#   eu_cov = eu.deal.perc.of.population.,
-#   other_cov = other.sources.perc.of.population.,
-#   dom_cov = domestic.supply.perc.of.population.
-# )]
-# 
-# # the variable `secured and or expected vaccine perc of population`
-# # should indicate the percent of the population covered. (just making
-# # sure I understand the data)
-# perc_dis <- function(x,y){
-#   2 * abs(x - y)/ (x+y)
-# }
-# 
-# waitifnot(all(perc_dis(covsup$sec_cov, (
-#   (covsup$sec * 10 ^ 6) / covsup$pop * 100
-# )) < 0.01))
-# 
-# covsup[,c("needed", "sec"):=NULL]
-# 
-# # WEO ---------------------------------------------------
-# weo_oct_21 <- fread("WEOOct2021all.txt")
-# weo_oct_21 <- 
-#   weo_oct_21[`Subject Descriptor` == 
-#                "Gross domestic product per capita, current prices" & 
-#                Units == "Purchasing power parity; international dollars",
-#              .(iso3c = ISO, gdppc = `2021`)]
-# weo_oct_21$gdppc <- as.numeric(gsub(",", "", weo_oct_21$gdppc))
-# weo_oct_21 <- na.omit(weo_oct_21)
-# check_dup_id(weo_oct_21, c("iso3c"))
-# 
-# # Economist Excess Mortality -----------------------------
-# exc_d <- fread("economist_excess_deaths.csv")
-# exc_d[country == "Congo", country:="congo kinshasa"]
-# exc_d[,iso3c:=name2code(country)]
-# exc_d <- exc_d[!is.na(iso3c)]
-# exc_d$country <- NULL
-# exc_d[,excess:=(lower + upper)/2]
-# 
-# # Income groups ---------------------------------------------------
-# income <- readstata13::read.dta13("historical_wb_income_classifications.dta")
-# income <- income %>% dfdt()
-# income <- income[year==2021]
-# 
-# # Merge ---------------------------------------------------
-# dt <- merge(exc_d, weo_oct_21, all.x = T, by = "iso3c")
-# dt <- merge(dt, income[,.(income, iso3c)], all.x = T, by = "iso3c")
-# dt <- merge(dt, covsup, by = "iso3c", all.x = T)
-# 
-# check_dup_id(dt, c("iso3c"))
-# setwd(input_dir)
-# 
-# # Income averages: ---------------------------------------------------
-# for (i in c("lower", "upper", "official", 
-#             "gdppc", "excess", "sec_cov", 
-#             "bilat_cov", "covax_cov", "eu_cov",
-#             "other_cov", "dom_cov")) {
-#   var_name <- paste0("inc_", i)
-#   dt <- dt[,(var_name):= weighted_mean(eval(as.name(i)), pop, na.rm = T),
-#      by = income][]
-# }
-# waitifnot(length(na.omit(unique(dt$inc_excess)))==4)
-# waitifnot(length(na.omit(unique(dt$inc_gdppc)))==4)
-# waitifnot(length(na.omit(unique(dt$inc_upper)))==4)
-# waitifnot(length(na.omit(unique(dt$inc_lower)))==4)
-# waitifnot(all(na.omit(dt$upper>=dt$lower)))
-# waitifnot(all(na.omit(dt$excess>=dt$lower)))
-# waitifnot(all(na.omit(dt$inc_excess>=dt$inc_lower)))
-# waitifnot(all(na.omit(dt$inc_upper>=dt$inc_lower)))
-# 
-# # GRAPH -------------------------------------------------------------------
-# dt$income <- dt$income %>% factor(levels = c("LIC", "LMIC", "UMIC", "HIC"))
-# 
-# option_log <- list(scale_x_log10(labels = scales::dollar_format(),
-#                      breaks = breaks_log(n = 6)))
-# 
-# for (i in c("sec_cov",
-#             "bilat_cov",
-#             "covax_cov",
-#             "eu_cov",
-#             "other_cov",
-#             "dom_cov")) {
-#   i <- "sec_cov"
-#   plot <- ggplot(dt[!is.na(income)], aes(
-#     x = gdppc,
-#     y = eval(as.name(i)),
-#     color = income
-#   )) + 
-#     geom_point() +
-#     my_custom_theme +
-#     scale_color_custom +
-#     labs(y = "Total vaccine coverage purchased\n(% of population)", x = "GDP per capita") +
-#     scale_x_log10(labels = scales::dollar_format(),
-#                   breaks = breaks_log(n = 6)) + 
-#     ggrepel::geom_text_repel(data = dt[income!="LIC"], 
-#                              aes(label = code2name(iso3c)), 
-#                              show.legend = FALSE)
-#   
-#   ggsave(paste0(i, "gdppc_scatter_income.pdf"),
-#          plot,
-#          width = 10,
-#          height = 7)
-#   
-#   plot <- ggplot(dt, aes(
-#     x = excess,
-#     y = eval(as.name(i)),
-#     color = income
-#   )) + 
-#     geom_point() +
-#     my_custom_theme +
-#     scale_color_custom +
-#     labs(y = i, x = "Excess Mortality") + 
-#     scale_x_log10(labels = scales::pretty_breaks(n = 6),
-#                   breaks = breaks_log(n = 6))
-#   
-#   ggsave(paste0(i, "excess_mort_scatter_income.pdf"),
-#          plot,
-#          width = 7,
-#          height = 5)
-# }
-# 
-# 
-# # Check WHO ---------------------------------------------------------------
-# 
-# # compare with our data:
-# load("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input/index_convergence.RData")
-# 
-# setwd(paste0(raw_dir, "/who_check"))
-# 
-# dli <- dir()
-# dli <- lapply(dli, read_xlsx)
-# dli <- rbindlist(dli, fill = T)
-# check_dup_id(dli, c("YEAR", "ANTIGEN", "COVERAGE"))
-# dli <- dli[,.(year = YEAR, 
-#               antigen = ANTIGEN, 
-#               desc = ANTIGEN_DESCRIPTION, 
-#               coverage = COVERAGE)]
-# 
-# fix_countries <- setDT(fix_countries)[,
-#                       .(label, year, meanval = w.meanval)][order(label)]
-# 
-# temp_bridge <- fread("desc	label
-# BCG	
-# DTP-containing vaccine, 3rd dose	Diptheria
-# DTP-containing vaccine, 3rd dose	Tetanus
-# DTP-containing vaccine, 3rd dose	Pertussis
-# Hib3	Hib
-# HepB3	Hepb
-# HPV VACCINATION PROGRAM COVERAGE - FIRST DOSE - FEMALES Target population who received the first dose of HPV vaccine in the reporting year	HPV
-# HPV Vaccination coverage by age 15, complete schedule, females	HPV
-# Measles-containing vaccine, 2nd dose	Measles
-# Pneumococcal conjugate vaccine, final dose	Pneumococcal
-# Inactivated polio-containing vaccine, 1st dose	
-# Polio, 3rd dose	Polio
-# Protection at birth (PAB) against neonatal tetanus	Tetanus
-# Rotavirus, last dose	Rotavirus
-# Rubella-containing vaccine, 1st dose	Rubella
-# Yellow fever vaccine	
-# ")
-# 
-# dli <- merge(dli, temp_bridge, by = "desc", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all()
-# fix_countries <- merge(fix_countries, temp_bridge, by = "label", all.x = T, allow.cartesian = T) %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
-# check <- merge(fix_countries, dli, by = c("desc", "label", "year"))
-# plot <- ggplot(check,
-#        aes(
-#          x = coverage,
-#          y = meanval,
-#          color = label,
-#          group = label,
-#          label = year
-#        )) + geom_point() +
-#   labs(x = "WHO", y = "Our Estimate", title = "Global Estimates of Vaccine Coverage") +
-#   my_custom_theme +
-#   geom_abline(intercept = 0,
-#               slope = 1,
-#               size = 0.5) + 
-#   coord_cartesian(ylim = c(0, 100), xlim = c(0, 100)) + 
-#   geom_text_repel(show.legend = FALSE) + 
-#   scale_color_custom
-# 
-# setwd(input_dir)
-# ggsave("global_estimates_comparison2.pdf", plot)
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
