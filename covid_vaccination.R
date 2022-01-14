@@ -1,7 +1,3 @@
-# To do:
-
-# Need to change the y axis of the comparing UK with developing world graph...go back to waht it was before (something about DPT)
-
 rm(list = ls()) # clear the workspace
 
 # Options: ----------------------------------------------------------------
@@ -12,11 +8,6 @@ options(error=NULL)
 
 # disable data.table auto-indexing (causes errors w/ dplyr functions)
 options(datatable.auto.index = FALSE)
-
-
-# Notes -------------------------------------------------------------------
-
-
 
 # Directories -------------------------------------------------------------
 
