@@ -44,7 +44,7 @@ setwd(raw_dir)
     "leaps", "bestglm", "dummies", "caret", "jtools", "huxtable", "haven", "ResourceSelection",
     "betareg", "quantreg", "margins", "plm", "collapse", "kableExtra", "tinytex",
     "LambertW", "scales", "stringr", "imputeTS", "shadowtext", "pdftools", "glue",
-    "purrr", "OECD", "RobustLinearReg", "forcats", "WDI", "xlsx", "googlesheets4", "RCurl", "readxl", "httr")
+    "purrr", "OECD", "RobustLinearReg", "forcats", "WDI", "readxl", "httr", "googlesheets4")
 }
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
@@ -384,8 +384,7 @@ for (i in seq(2015, 2021)) {
 
 waitifnot((mad[iso3c == "USA"][year == 2021]$gdppc>0)==TRUE)
 
-mad[,(c('country','wdi_gdppc','wdi_gdppc_gr','gdppc.n', 
-        'weo_gdppc', 'weo_gdppc_gr')):=NULL]
+mad[,(c('gdppc.n', 'weo_gdppc', 'weo_gdppc_gr')):=NULL]
 mad <- mad[order(iso3c, year)]
 
 setwd(input_dir)
@@ -421,7 +420,7 @@ vac_sched <- merge(vac_sched, na.omit(bridge[,.(vaccine_schedule, disease)]), al
                    by.x = "description", by.y = "vaccine_schedule")
 vac_sched <- vac_sched[,.(year = min(year, na.rm = T)),by = c("iso3c", "disease")]
 df <- merge(df, vac_sched[,.(iso3c, disease, yr_sched = year)], by = c("disease", "iso3c"), all.x = T)
-df[,c("source_url","country.x","country.y", "popwork"):=NULL]
+df[,c("source_url","country", "popwork"):=NULL]
 df <- df[!is.na(iso3c)]
 
 # WB income classification
@@ -593,6 +592,7 @@ dta_avail_df[,disease:=unlist(lapply(disease, custom_title))]
 
 # make plot
 plot <- dta_avail_df %>%
+  filter(year<=2021) %>% 
   ggplot(.,
          aes(
            x = year,
@@ -713,9 +713,11 @@ j[region!="Sub-Saharan Africa",region:="OECD"]
 j <- j[,.(coverage = weighted_mean(coverage, pop, na.rm = T)), by = region]
 
 # SubSaharan Africa Coverage
-j[region=="Sub-Saharan Africa",]$coverage
+sub_sh_cov <- j[region=="Sub-Saharan Africa",]$coverage %>% signif(2)
+var2oleaf(sub_sh_cov)
 # OECD coverage
-j[region=="OECD",]$coverage
+oecd_cov <- j[region=="OECD",]$coverage %>% signif(2)
+var2oleaf(oecd_cov)
 
 # Global # fully vaccinated 
 j <- df_covid %>% dfdt()
@@ -983,7 +985,7 @@ jx$disease <- jx$disease %>%
   factor(., levels = c(setdiff(sort(unique(jx$disease)), 'Covid-19'),'Covid-19'))
 
 plot <-
-  ggplot(jx[disease %in% d2graf & income == "Global"],
+  ggplot(jx[disease %in% d2graf & income == "Global" & year <= 2021], # we're including a year restriction because COVID data for 2022 as of 1/7/2022 is pretty crappy right now
          aes(x = year, group = disease, color = disease)) +
   geom_line(aes(y = coverage, group = disease, color = disease)) +
   geom_ribbon(
@@ -1103,12 +1105,13 @@ j <- j %>% na.omit
 check_dup_id(j, c("disease", "yr"))
 a <- j$disease %>% unique() %>% length()
 waitifnot(a>10)
-
+   
 
 for (i in c(1, 2)) {
   if (i == 2) {
     # first 3 years:
     j <- j[yr <= 3]
+    # j[disease!="Covid-19", fin_yr:=3]
   }
   set.seed(481494561)
   plot <- j %>% filter(disease != "Covid-19") %>%
@@ -1136,9 +1139,9 @@ for (i in c(1, 2)) {
       yr == fin_yr],
       aes(x = yr, y = coverage, label = disease),
       color = "grey79") +
-    ggrepel::geom_text_repel(data = j[disease == "Covid-19" &
+    geom_text(data = j[disease == "Covid-19" &
       yr == fin_yr],
-      aes(x = yr, y = coverage, label = disease)) +
+      aes(x = yr+0.2, y = coverage+4, label = disease)) +
     my_custom_theme +
     scale_color_custom +
     labs(x = "Years from First Available Data", y = "Coverage (%)") +
@@ -1162,21 +1165,28 @@ j <- df_disease_avg[income == "Global" &
                disease == "measles" & 
                year %in% c(2019)]$coverage
 
+# we are using MCV1 for the measles comparison:
 n_meas <- 
   (j/100) * sum(df[disease == "measles" & 
   year %in% c(2019)]$pop_wm, 
   na.rm = T)
 
+# for flu, take it from the Palache paper:
 n_flu <- 531 * 10^6
 
-j <- df_disease_avg[income == "Global" & 
-                      disease == "covid-19" & 
-                      year %in% c(2021)]$coverage
-
-n_covid <- 
-  (j/100) * sum(df[disease == "covid-19" & 
-  year %in% c(2021)]$pop_wm, 
-  na.rm = T)
+# for covid, get from OWID:
+setwd(input_dir)
+myfile <-
+  RCurl::getURL(
+    'https://covid.ourworldindata.org/data/owid-covid-data.csv',
+    ssl.verifyhost = FALSE,
+    ssl.verifypeer = FALSE
+  )
+df_covid <- read.csv(textConnection(myfile), header = T) %>% as.data.frame() %>% as.data.table()
+n_covid <-
+  df_covid[iso_code == "OWID_WRL"]$total_vaccinations %>% na.omit() %>% max() %>% (function(x) {
+    x
+  })/2
 
 p <- data.table(
   disease = c("Measles", "Flu", "Covid-19"),
@@ -1240,7 +1250,7 @@ plot <-
   ggplot(p, aes(x = disease, y = n / (10 ^ 6), fill = disease)) +
   geom_bar(position = "stack", stat = "identity") +
   labs(x = "",
-       y = "Annual Doses\nDelivered (m)") +
+       y = "Annual Vaccinations\nDelivered (m)") +
   scale_y_continuous(
     breaks = scales::pretty_breaks(n = 13),
     labels = scales::comma_format(accuracy = 1)
@@ -1325,9 +1335,10 @@ setwd(input_dir)
 setwd(overleaf_dir)
 for (y in c(2000, 2020)) {
   for (d in c("Measles", "Covid-19", "HiB")) {
+    if(d == "Covid-19") {y <- 2021}
     assign(paste0("cv_", tolower(d), y),
            fix_countries[disease == d][year == y]$w.coef.var %>%
-             signif(3))
+             signif(2))
     cat(
       eval(as.name(paste0("cv_", tolower(d), y))),
       file = paste0("cv_", tolower(d), y, ".txt")
@@ -1458,14 +1469,15 @@ plot <-
     )
   ) + 
   annotation_logticks(sides = "b") +
-  scale_x_continuous(labels=scales::dollar_format(), trans = "log10") + 
+  scale_x_continuous(labels=scales::dollar_format(accuracy = 1), trans = "log10") + 
   my_custom_theme + 
   labs(y = "Coverage (%)", subtitle = "", x = "GDP per capita")+
   scale_color_custom + 
   guides(colour = guide_legend(override.aes = list(size = 3))) + 
-  facet_wrap(~disease_lab) + 
+  facet_wrap(~disease_lab, scales = "free") + 
   scale_y_continuous(breaks = seq(0,100,20)) + 
-  coord_cartesian(ylim = c(0, 100))
+  coord_cartesian(ylim = c(0, 100), xlim = c(377,154000)) + 
+  theme(panel.spacing.x = unit(2, "lines"))
 
 setwd(overleaf_dir)
 ggsave(
