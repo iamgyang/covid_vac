@@ -29,18 +29,22 @@ setwd(raw_dir)
 {
   list.of.packages <- c(
     "base", "car", "cowplot", "dplyr", "ggplot2", "ggthemes", "graphics", "grDevices",
-    "grid", "gridExtra", "gvlma", "h2o", "lubridate", "MASS", "readxl", "rio", "rms",
+    "grid", "gridExtra", "gvlma", "h2o", "lubridate", "MASS", "readxl", "rio", 
     "rsample", "tidyr", "utils", "zoo", "xtable", "stargazer", "data.table",
     "ggrepel", "foreign", "fst", "countrycode", "wbstats", "quantmod", "R.utils",
     "leaps", "bestglm", "dummies", "caret", "jtools", "huxtable", "haven", "ResourceSelection",
     "betareg", "quantreg", "margins", "plm", "collapse", "kableExtra", "tinytex",
     "LambertW", "scales", "stringr", "imputeTS", "shadowtext", "pdftools", "glue",
-    "purrr", "OECD", "RobustLinearReg", "forcats", "WDI", "readxl", "httr", "googlesheets4")
+    "purrr", "OECD", "RobustLinearReg", "forcats", "WDI", "readxl", "httr", "googlesheets4",
+    "glue")
 }
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
 if (length(new.packages)) install.packages(new.packages, dependencies = TRUE)
-for (package in list.of.packages) {library(eval((package)), character.only = TRUE)}
+for (package in list.of.packages) {
+  cat(paste0(package, "\n"))
+  library(eval((package)), character.only = TRUE)
+}
 
 # set GGPLOT default theme:
 theme_set(theme_clean() + 
@@ -184,7 +188,7 @@ yf_df <- yf_df[, .(iso3c, year, coverage = value*100)]
 yf_df$vaccine <- "yellow fever"
 yf_df$source <- "Dryad"
 
-# Manually gathered data --------------------------------------------------
+# Manually gathered data ---------------------------------
 
 setwd(raw_dir)
 manu <- readxl::read_xlsx('manually gathered data.xlsx') %>% as.data.table()
@@ -262,6 +266,11 @@ bridge <- readxl::read_xlsx("bridge_disease_vaccine2.xlsx", sheet = 1) %>% as.da
 wb_income <- readstata13::read.dta13("historical_wb_income_classifications.dta") %>% dfdt()
 wb_income <- wb_income[year == 2021, .(iso3c, income)]
 
+# African subnational regions ---------------------------------------------
+
+africa_regions <- fread(glue("{raw_dir}/regions_africa.csv"), header = T)
+africa_regions[,c("country", "V1"):=NULL]
+setnames(africa_regions, "region", "af_region")
 
 # Yellow Fever Risk -------------------------------------------------------
 
@@ -307,26 +316,39 @@ rem <- c(
   'Upper middle income',
   'World'
 )
+
 df_covid <- df_covid[!location%in%rem]
+df_covid[iso_code=="OWID_KOS",iso_code:="XKX"]
+df_covid[iso_code=="OWID_CYN",iso_code:="CYP"]
 df_covid[, iso_check := name2code(
   location,
   custom_match = c(
     'Kosovo' = "XKX",
     "Timor" = "TLS",
     "Micronesia (country)" = "FSM"))]
-waitifnot(df_covid$iso_code==df_covid$iso_check)
+waitifnot(all(df_covid$iso_code==df_covid$iso_check))
 df_covid <- 
   df_covid[,.(iso3c = iso_code, date, 
-              cov = people_fully_vaccinated_per_hundred)]
+              cov = people_fully_vaccinated_per_hundred,
+              booster = total_boosters_per_hundred)]
+              # total_boosters_per_hundred
+              # people_fully_vaccinated_per_hundred
               # people_vaccinated_per_hundred
 df_covid$cov <- as.numeric(df_covid$cov)
-df_covid <- df_covid[!is.na(cov)]
+df_covid <- df_covid[!is.na(cov)|!is.na(booster)]
+waitifnot(df_covid[!is.na(booster) & is.na(cov)] %>% na.omit() %>% nrow() == 0)
 df_covid_mo <- df_covid %>% as.data.frame() %>% as.data.table()
 df_covid <- df_covid[,.(coverage = max(na.omit(cov), na.rm = T)), 
                      by = .(iso3c, year = lubridate::year(date))]
+invisible(lapply(names(df_covid), function(x) {
+  set(df_covid,
+      which(is.infinite(df_covid[[x]])),
+      j = x,
+      value =
+        NA)
+}))
 df_covid <- df_covid[!grepl("OWID", df_covid$iso3c),]
 df_covid[,vaccine:="Covid"]
-
 
 # GDP per capita from WEO -------------------------------------------------
 
@@ -417,6 +439,9 @@ df <- df[!is.na(iso3c)]
 # WB income classification
 df <- merge(df, wb_income, by = c("iso3c"), all.x = T) %>% dfdt()
 
+# African regions:
+df <- merge(df, africa_regions, by = c("iso3c"), all.x = T) %>% dfdt()
+
 # Vaccine discovery
 df <- merge(df, vac_disc, by = c("disease"), all.x = T) %>% dfdt()
 
@@ -425,11 +450,10 @@ df <- merge(df, mad, by = c("iso3c", "year"), all.x = T) %>% dfdt()
 
 setwd(input_dir)
 save.image("post_merge.RData")
-
-
-# Adjustments -------------------------------------------------------------
 setwd(input_dir)
 load("post_merge.RData")
+
+# Adjustments -------------------------------------------------------------
 
 # ! We take the Yellow Fever data from 'Dryad' (Shearer et. al.'s untargeted 
 # unbiased estimates of vaccination coverage), as opposed to from the WHO data,
@@ -486,6 +510,7 @@ df <- df[, .(coverage = max(coverage, na.rm = T)),
            "yr_sched",
            "poptotal",
            "income",
+           "af_region",
            "emerged",
            "microbe_id",
            "licensing",
@@ -498,7 +523,8 @@ waitifnot(all(na.omit(df$disease!="DTP-related")))
 check_dup_id(df, c("disease", "iso3c", "year"))
 
 # Check how our data coverage is -- global estimates:
-# if the vaccine summary measure is after the schedule, then set population to be 0
+# if the vaccine summary measure is after the schedule, then set 
+# population to be 0
 exp_grid <- CJ(
   disease = unique(df$disease),
   iso3c = unique(who_keep_iso3c),
@@ -534,12 +560,11 @@ df <- merge(dis_yr, df, all.x = T, by = c("disease", "year"))
 
 setwd(input_dir)
 save.image("adjustments.RData")
+setwd(input_dir)
+load("adjustments.RData")
 
 # Summary Statistics about data coverage: ----------------------------
 # for each disease, how many countries do we have?
-
-setwd(input_dir)
-load("adjustments.RData")
 
 # first year coverage is >40%:
 
@@ -614,9 +639,9 @@ df <- df %>%
   ungroup() %>%
   arrange(iso3c, year) %>%
   group_by(iso3c) %>%
-  # IMPORTANT: for INCOME, we fill BACKWARDS (i.e. assume that 
-  # if the country was LIC in 1970, then it was a LIC in 1960)
+  # IMPORTANT: for INCOME, we fill BACKWARDS
   fill(income, .direction = "downup") %>%
+  fill(af_region, .direction = "downup") %>%
   as.data.frame() %>%
   as.data.table()
 
@@ -643,21 +668,31 @@ df_disease_avg <-
       ), 
      by = c("year", "disease")] %>% dfdt()
 
-# Create a table that shows the global coverage estimates by INCOME too:
-df_disease_avg_income <- 
-  df[, .(coverage = weighted_mean(coverage, pop_wm, na.rm = T),
-         num_c = length(unique(iso3c)),
-         perc_pop = sum(na.omit(perc_pop), na.rm = T),
-         w_stdev = w.sd(coverage, pop_wm)
+# Create a table that shows the global coverage estimates by INCOME, REGION, 
+# and AFRICAN REGION too:
+
+# SAVING DATAFRAME AT THIS POINT FOR RANDOM STATS
+setwd(input_dir)
+saveRDS(df, "df_prior_to_making_df_disease_avg.RDS")
+
+df[,region:=countrycode(iso3c, "iso3c", "region")]
+for (i in c("income", "region", "af_region")) {
+  assign(glue("df_disease_avg_{i}"), 
+         df[, .(coverage = weighted_mean(coverage, pop_wm, na.rm = T),
+                num_c = length(unique(iso3c)),
+                perc_pop = sum(na.omit(perc_pop), na.rm = T),
+                w_stdev = w.sd(coverage, pop_wm)
          ), 
-     by = c("year", "disease", "income")] %>% dfdt()
+         by = c("year", "disease", i)] %>% dfdt()
+         )
+}
 
 # Check that in each year, we're looking at the total global population:
 df_disease_avg_income <- df_disease_avg_income[!is.na(income)]
 df_disease_avg_income[,perc_glob_pop:=sum(perc_pop, na.rm = T), by = .(year, disease)]
 waitifnot(nrow(df_disease_avg_income[abs(perc_glob_pop-1)>0.0000001])==0)
 
-# Merge the two:
+# Merge them:
 df_disease_avg[,income:="Global"]
 df_disease_avg <- 
   rbindlist(
@@ -667,18 +702,13 @@ df_disease_avg <-
     ), fill = T
   )
 
-df_disease_avg$perc_glob_pop <- NULL
 
 setwd(input_dir)
 save.image("summ_stats.RData")
-
-
-
-# RANDOM STATS ------------------------------------------------------------
-
 setwd(input_dir)
 load("summ_stats.RData")
 
+# RANDOM STATS ------------------------------------------------------------
 
 # subsaharan africa fully vaccinated %:
 # OECD fully vaccinated date:
@@ -1004,6 +1034,8 @@ setwd(input_dir)
 
 # Line: Income group coverage over time ------------------------------
 jx[,income:=factor(income, levels = c("HIC", "UMIC", "LMIC", "LIC"))]
+
+# FULL PLOT
 plot <- ggplot(jx[disease %in% d2graf & income != "Global"],
        aes(
          x = year,
@@ -1021,8 +1053,29 @@ plot <- ggplot(jx[disease %in% d2graf & income != "Global"],
       theme(legend.key.size = unit(3, 'mm')) +
       theme(legend.key.width = unit(2.5,"mm"))
 setwd(overleaf_dir)
-ggsave("line_income.pdf", plot, width = 11, height = 6)
+ggsave("line_income_full.pdf", plot, width = 11, height = 6)
 setwd(input_dir)
+
+# FACETED BY INCOME GROUP
+for (i in unique(na.omit(jx$income))) {
+  plot <- ggplot(jx[disease %in% d2graf & income != "Global" & income == i],
+                 aes(
+                   x = year,
+                   y = coverage
+                 )) +
+    scale_x_continuous(limits = c(1980, 2021)) +
+    geom_line() +
+    facet_wrap( ~ disease) +
+    scale_color_custom +
+    my_custom_theme +
+    labs(y = "Coverage (%)", x = "") + 
+    guides(color = guide_legend(override.aes = list(size = 3))) +
+    theme(legend.key.size = unit(3, 'mm')) +
+    theme(legend.key.width = unit(2.5,"mm"))
+  setwd(overleaf_dir)
+  ggsave(glue("line_income_full_{i}.pdf"), plot, width = 11, height = 6)
+  setwd(input_dir)  
+}
 
 # random stats:
 
@@ -1042,6 +1095,8 @@ var2oleaf(umic_addtl_meas_yr)
 var2oleaf(lmic_addtl_meas_yr)
 var2oleaf(lic_addtl_meas_yr)
 
+# Insert granular covid coverage for each region + income group  ------------------------
+
 # get the covid coverage:
 h <- merge(CJ(iso3c = unique(df_covid_mo$iso3c), 
               date = unique(df_covid_mo$date)), 
@@ -1049,36 +1104,184 @@ h <- merge(CJ(iso3c = unique(df_covid_mo$iso3c),
               all.x = T, by = c("iso3c", "date"))
 h <- merge(h, pop[year == 2021,.(iso3c, poptotal)], by = "iso3c", all = T)
 
+# narrow down to countries within the WHO sample:
+h <- h[iso3c%in%unique(na.omit(df$iso3c))]
+
 # fill downwards the missing data:
 h <- h[order(iso3c, date)]
 h <- h %>%
-group_by(iso3c) %>%
-fill(cov, .direction = "down") %>% 
-dfdt()
+  group_by(iso3c) %>%
+  fill(cov, .direction = "down") %>%
+  fill(booster, .direction = "down") %>%
+  dfdt()
 h[is.na(cov), cov:=0]
+h[is.na(booster), booster:=0]
 h <- h[!is.na(date)]
 
 # income groups
 h <- merge(h,wb_income,by =c("iso3c"),all.x = T)
 
 # global coverage covid by income group:
-hii <-
-  h[, .(coverage = weighted_mean(cov, poptotal, na.rm = T)), by = c("income", "date")] %>%
-  na.omit %>% dfdt()
+h_income <- as.data.table(h)
+h_income[,income:="Global"]
+h_income <- rbindlist(list(h, h_income))
+setnames(h_income, "income", "income_and_region")
+
+# then do the same thing for regional stuff:
+h_reg <- h %>% as.data.table()
+h_reg[, region:=countrycode::countrycode(iso3c, "iso3c", "region")]
+setnames(h_reg, "region", "income_and_region")
+
+# then do the same for regions in Africa:
+africa_regions <- fread(glue("{raw_dir}/regions_africa.csv"), header = T)
+africa_regions$V1 <- NULL
+h_af_reg <- h %>% as.data.table()
+h_af_reg$income <- NULL
+h_af_reg <- merge(h_af_reg, africa_regions, by = c("iso3c"), all.x = T)
+h_af_reg <- h_af_reg[!is.na(region)]
+check_dup_id(h_af_reg, c("iso3c", "date"))
+setnames(h_af_reg, "region", "income_and_region")
+
+# now put them all together
+hii <- rbindlist(list(h_income, h_reg, h_af_reg), fill = T)
+hii <- hii[, .(coverage = weighted_mean(cov, poptotal, na.rm = T),
+               booster = weighted_mean(booster, poptotal, na.rm = T)), 
+               by = c("income_and_region", "date")] %>% na.omit %>% dfdt()
+
+setwd(input_dir)
+save.image("pre_early_stage_covid.RData")
+load("pre_early_stage_covid.RData")
+
+# Random stats: projected coverage for LMIC -------------------------------------
+
+c_hii <- as.data.table(hii)
+
+# get only LICs
+c_hii <- c_hii[income_and_region == "LIC"]
+c_hii[,coverage:=coverage/100]
+
+# create a function that: fits line through LIC coverage from "start" to "end" by
+# fitting a straight line and spitting out the date
+project_coverage <-
+  function(DT,
+           income_group = "LIC",
+           start_date,
+           end_date,
+           percentage_vector = c(0.2, 0.4),
+           fit_function = "lm") {
+    DT <- c_hii %>% as.data.table()
+    start_date <- as.numeric(as.Date(start_date))
+    end_date <- as.numeric(as.Date(end_date))
+    DT[, date := as.numeric(as.Date(date))]
+    
+    if (fit_function == "lm") {
+      copy_DT <- DT[date == start_date | date == end_date]
+      waitifnot(nrow(copy_DT) == 2)
+      fit <- lm(coverage ~ date, data = copy_DT)
+    }
+    if (fit_function == "sigmoid") {
+      copy_DT <- DT[(date >= start_date) & (date <= end_date)]
+      fit <- glm(coverage ~ date, data = copy_DT, family = "binomial")
+    }
+    if (fit_function == "exp") {
+      copy_DT <- DT[(date >= start_date) & (date <= end_date)]
+      fit <- lm(log(coverage) ~ date, data = copy_DT)
+    }
+    to_predict <- data.frame(date = seq(start_date, as.numeric(as.Date("2024-12-01"))))
+    if (fit_function != "exp") {
+      to_predict$coverage <- predict(fit, to_predict, type = "response")
+    } else if (fit_function == "exp") {
+      to_predict$coverage <- exp(predict(fit, to_predict, type = "response"))
+    }
+    to_predict <- as.data.table(to_predict)
+    
+    
+    # find the date closest to 40% and 20%
+    horiz_lines <- NULL
+    for (i in percentage_vector) {
+      to_predict[, c(glue("dist_{i}")) := abs(coverage - i)]
+      cat(glue("date for {i*100}% coverage:"))
+      cat(paste0(as.character(as.Date(to_predict[eval(as.name(glue("dist_{i}"))) ==
+                                            min(eval(as.name(glue("dist_{i}\n"))),
+                                                na.rm = T),]$date)), "\n"))
+      
+      the_label <- paste0(i * 100, "% coverage: ",
+                          (as.Date(to_predict[eval(as.name(glue("dist_{i}"))) ==
+                                                min(eval(as.name(glue("dist_{i}\n"))),
+                                                    na.rm = T),]$date)))
+      the_y_intercept <- i*100
+      
+      if (is.null(horiz_lines)) {
+        horiz_lines <- list(geom_hline(yintercept = the_y_intercept),
+                            geom_text(aes(
+                              x = as.Date("2022-01-01")), y = the_y_intercept + 5
+                            , label = the_label, check_overlap = TRUE))
+      } else{
+        horiz_lines <- c(horiz_lines, list(
+          geom_hline(yintercept = the_y_intercept),
+          geom_text(aes(
+            x = as.Date("2022-01-01")), y = (the_y_intercept + 5)
+          , label = the_label, check_overlap = TRUE)
+        ))
+      }
+      
+    }
+    
+    ggplot(data = DT, aes(x = as.Date(date), y = coverage * 100)) + geom_point() +
+      geom_line(
+        data = to_predict,
+        aes(x = as.Date(date), y = coverage * 100),
+        linetype = "dashed",
+        color = "maroon"
+      ) +
+      my_custom_theme +
+      labs(x = "",
+           y =  "",
+           subtitle = "Coverage") +
+      scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+      horiz_lines
+    
+  }
+
+
+# create a function that: fits line through LIC coverage from "start" to "end" by 
+# fitting a sigmoid curve and spitting out the date
+
+
+
+
+
+
+
+
+
 
 # Line: Early stage COVID -------------------------------------------------------
-h <- h[,.(coverage=weighted_mean(cov, poptotal, na.rm = T)), by = "date"] %>% 
-     na.omit %>% dfdt()
-h[,year:=as.numeric(2021+(as.Date(date) - as.Date("2021-01-01"))/365)]
-h[,disease:="Covid-19"]
 
+for (i in
+     c('df_disease_avg',
+       'df_disease_avg_region',
+       'df_disease_avg_af_region')) {
+  assign(glue("{i}_copy"), as.data.table(as.data.frame(eval(as.name(i)))))
+}
+setnames(df_disease_avg_copy, "income", "income_and_region")
+setnames(df_disease_avg_region_copy, "region", "income_and_region")
+setnames(df_disease_avg_af_region_copy, "af_region", "income_and_region")
+df_disease_avg_total_copy <- 
+  rbindlist(list(df_disease_avg_copy,
+            df_disease_avg_region_copy,
+            df_disease_avg_af_region_copy), fill = T) %>%
+  dfdt()
+df_disease_avg_total_copy <- df_disease_avg_total_copy[!is.na(income_and_region)]
 
-# merge with average disease:
-j <- df_disease_avg[income == "Global"& 
-                      disease!="covid-19" & 
-                      disease!="Covid-19",
-                    .(disease, year, coverage)] %>% dfdt()
-j <- rbindlist(list(j, h), fill = T)
+hii[,year:=as.numeric(2021+(as.Date(date) - as.Date("2021-01-01"))/365)]
+hii[,disease:="Covid-19"]
+
+# merge with average disease by income:
+j <- df_disease_avg_total_copy[disease!="covid-19" & 
+                               disease!="Covid-19",
+                               .(disease, year, coverage, income_and_region)] %>% dfdt()
+j <- rbindlist(list(j, hii), fill = T)
 
 j[,minyr:=min(year, na.rm = T), by = "disease"]
 j[,yr:=year-minyr]
@@ -1090,63 +1293,311 @@ j <- j[!(disease=="Influenza" & year == 2020)]
 j <- j[order(disease, yr)]
 j[,fin_yr:=max(yr),by = "disease"]
 j$date <- NULL
+
+# need to append in vaccinations for the booster shot:
+j[disease != "Covid-19" & is.na(booster), booster := coverage]
 j <- j %>% na.omit
 
 # checks:
-check_dup_id(j, c("disease", "yr"))
+check_dup_id(j, c("disease", "yr", "income_and_region"))
 a <- j$disease %>% unique() %>% length()
 waitifnot(a>10)
-   
 
-for (i in c(1, 2)) {
-  if (i == 2) {
-    # first 3 years:
-    j <- j[yr <= 3]
-    # j[disease!="Covid-19", fin_yr:=3]
+for (graph_type in c("booster", "coverage")) {
+  for (income_ in unique(na.omit(j$income_and_region))) {
+    for (i in c("full", "first_three_yrs")) {
+      if (i == "first_three_yrs") {
+        # first 3 years:
+        to_plot <- j[yr <= 3] %>% as.data.frame() %>% as.data.table()
+        to_plot[disease != "Covid-19", fin_yr := 3]
+      } else if (i == "full") {
+        to_plot <- j %>% as.data.frame() %>% as.data.table()
+      }
+      set.seed(481494561)
+      plot <-
+        to_plot %>% filter(disease != "Covid-19" &
+                             income_and_region == income_) %>%
+        ggplot(., aes(
+          x = yr,
+          y = eval(as.name(graph_type)),
+          group = disease
+        )) +
+        geom_line(color = "grey79") +
+        geom_line(
+          data = to_plot[disease == "Covid-19" &
+                           income_and_region == income_],
+          aes(x = yr, y = eval(as.name(graph_type))),
+          color = "maroon",
+          size = 1
+        ) +
+        geom_point(
+          data = to_plot[disease != "Covid-19" &
+                           yr == fin_yr & income_and_region == income_],
+          aes(x = yr, y = eval(as.name(graph_type))),
+          size = 1.3,
+          color = "grey79"
+        ) +
+        geom_point(
+          data = to_plot[disease == "Covid-19" &
+                           yr == fin_yr & income_and_region == income_],
+          aes(x = yr, y = eval(as.name(graph_type))),
+          size = 2,
+          color = "maroon"
+        ) +
+        ggrepel::geom_text_repel(
+          data = to_plot[disease != "Covid-19" &
+                           yr == fin_yr &
+                           income_and_region == income_],
+          aes(
+            x = yr,
+            y = eval(as.name(graph_type)),
+            label = disease
+          ),
+          color = "grey79",
+          max.overlaps = Inf
+        ) +
+        geom_text(data = to_plot[disease == "Covid-19" &
+                                   yr == fin_yr &
+                                   income_and_region == income_],
+                  aes(
+                    x = yr + 0.2,
+                    y = eval(as.name(graph_type)) + 4,
+                    label = disease
+                  )) +
+        my_custom_theme +
+        scale_color_custom +
+        labs(x = "Years from First Available Data", y = "Coverage (%)") +
+        # theme(text = element_text(family = "Tahoma")) +
+        scale_y_continuous(limits = c(0, 100))
+      
+      setwd(overleaf_dir)
+      ggsave(
+        glue("line_early_covid_{i}_{income_}_{graph_type}.pdf"),
+        plot,
+        width = 8,
+        height = 5
+      )
+      setwd(input_dir)
+    }
   }
-  set.seed(481494561)
-  plot <- j %>% filter(disease != "Covid-19") %>%
-    ggplot(., aes(x = yr, y = coverage, group = disease)) +
-    geom_line(color = "grey79") +
-    geom_line(
-      data = j[disease == "Covid-19"],
-      aes(x = yr, y = coverage),
-      color = "maroon",
-      size = 1
-    ) +
-    geom_point(
-      data = j[disease != "Covid-19" & yr == fin_yr],
-      aes(x = yr, y = coverage),
-      size = 1.3,
-      color = "grey79"
-    ) +
-    geom_point(
-      data = j[disease == "Covid-19" & yr == fin_yr],
-      aes(x = yr, y = coverage),
-      size = 2,
-      color = "maroon"
-    ) +
-    ggrepel::geom_text_repel(data = j[disease != "Covid-19" &
-      yr == fin_yr],
-      aes(x = yr, y = coverage, label = disease),
-      color = "grey79") +
-    geom_text(data = j[disease == "Covid-19" &
-      yr == fin_yr],
-      aes(x = yr+0.2, y = coverage+4, label = disease)) +
-    my_custom_theme +
-    scale_color_custom +
-    labs(x = "Years from First Available Data", y = "Coverage (%)") +
-    # theme(text = element_text(family = "Tahoma")) +
-    scale_y_continuous(limits = c(0, 100))
-  
-  
-  setwd(overleaf_dir)
-  ggsave(paste0("line_early_covid", i, ".pdf"),
-         plot,
-         width = 8,
-         height = 5)
-  setwd(input_dir)
 }
+
+# GRAPHS FOR PRESS RELEASE -------------------------------------------------------
+
+for (graph_type in c("coverage")) {
+  for (income_ in c("LMIC", "UMIC", "LIC", "HIC", "Global")) {
+    for (i in c("full", "first_three_yrs")) {
+      for (k in c("just_covid", "full")) {
+        if (i == "first_three_yrs") {
+          # first 3 years:
+          to_plot <-
+            j[yr <= 3] %>% as.data.frame() %>% as.data.table()
+          to_plot[disease != "Covid-19", fin_yr := 3]
+        } else if (i == "full") {
+          to_plot <- j %>% as.data.frame() %>% as.data.table()
+        }
+        
+        if (k == "just_covid") {
+          ggplot_add_non_covid <- list()
+        } else if (k == "full") {
+          ggplot_add_non_covid <- list(
+            geom_line(
+              data =
+                to_plot[disease != "Covid-19" &
+                          income_and_region == income_, ],
+              color = "grey79",
+              aes(
+                x = yr,
+                y = eval(as.name(graph_type)),
+                group = disease
+              )
+            ) ,
+            geom_point(
+              data = to_plot[disease != "Covid-19" &
+                               yr == fin_yr &
+                               income_and_region == income_],
+              aes(x = yr, y = eval(as.name(
+                graph_type
+              ))),
+              size = 1.3,
+              color = "grey79"
+            ) ,
+            ggrepel::geom_text_repel(
+              data = to_plot[disease != "Covid-19" &
+                               yr == fin_yr &
+                               income_and_region == income_],
+              aes(
+                x = yr,
+                y = eval(as.name(graph_type)),
+                label = disease
+              ),
+              color = "grey79",
+              max.overlaps = Inf
+            )
+          )
+        }
+        
+        set.seed(481494561)
+        plot <-
+          ggplot() +
+          ggplot_add_non_covid +
+          geom_line(
+            data = to_plot[disease == "Covid-19" &
+                             income_and_region == income_],
+            aes(x = yr, y = eval(as.name(graph_type))),
+            color = "maroon",
+            size = 1
+          ) +
+          geom_point(
+            data = to_plot[disease == "Covid-19" &
+                             yr == fin_yr &
+                             income_and_region == income_],
+            aes(x = yr, y = eval(as.name(graph_type))),
+            size = 2,
+            color = "maroon"
+          ) +
+          geom_text(data = to_plot[disease == "Covid-19" &
+                                     yr == fin_yr &
+                                     income_and_region == income_],
+                    aes(
+                      x = yr + 0.2,
+                      y = eval(as.name(graph_type)) + 4,
+                      label = disease
+                    )) +
+          my_custom_theme +
+          scale_color_custom +
+          labs(x = "Years from First Available Data", y = "Coverage (%)") +
+          scale_y_continuous(limits = c(0, 100)) + 
+          scale_x_continuous(limits = c(0, 3), breaks = 0:3)
+        
+        setwd("C:/Users/user/Dropbox/CGD/Projects/covid_vaccination/press")
+        ggsave(
+          glue(
+            "line_early_covid_{i}_{income_}_{graph_type}_{k}.png"
+          ),
+          plot,
+          width = 8,
+          height = 5
+        )
+        setwd(input_dir)
+        
+      }
+    }
+  }
+}
+
+# MORE RANDOM STATS -------------------------------------------------------
+
+# number of each income group:
+for (i in unique(na.omit(j$income_and_region))) {
+  assign(paste0(tolower(i), "_num_iso"),
+         length(na.omit(unique(h[income == i][!is.na(poptotal)]$iso3c))))
+  # print results
+  cat(glue("{i} Num. countries:\n"), sep = "\n")
+  cat(eval(as.name(paste0(tolower(i), "_num_iso"))), sep = "\n")
+  
+}
+var2oleaf(lic_num_iso)
+var2oleaf(lmic_num_iso)
+var2oleaf(umic_num_iso)
+var2oleaf(hic_num_iso)
+
+# population of each income group:
+for (i in unique(na.omit(j$income_and_region))) {
+  assign(paste0(tolower(i), "_pop"),
+         (sum(h[date == min(date) & income == i]$poptotal, na.rm = T)/(10^6)) %>% 
+           signif(3))
+  # print results
+  cat(glue("{i} Population:\n"), sep = "\n")
+  cat(eval(as.name(paste0(tolower(i), "_pop"))), sep = "\n")
+  
+}
+var2oleaf(lic_pop)
+var2oleaf(lmic_pop)
+var2oleaf(umic_pop)
+var2oleaf(hic_pop)
+
+# how much coverage at 1 year mark is above certain disease:
+for (i in unique(na.omit(j$income_and_region))) {
+  # make new variables for the PERCENTAGE POINTS coverage above a certain disease
+  assign(paste0(tolower(i), "_above_hepb"),
+         signif(
+           j[income_and_region == i & disease == "Covid-19" & yr == 1]$coverage -
+             j[income_and_region == i & disease == "HepB" & yr == 1]$coverage
+           , 3))
+  
+  # for DIPHTHERIA (same numbers as DPT), we have to take the average at the 1 and 2 year mark
+  assign(paste0(tolower(i), "_times_DPT"),
+         signif(
+             j[income_and_region == i & disease == "Covid-19" & yr == 1]$coverage / 
+           mean(c(j[income_and_region == i & disease == "Diphtheria" & yr == 2]$coverage, 
+                  j[income_and_region == i & disease == "Diphtheria" & yr == 0]$coverage))
+             , 3))
+  
+  # print results
+  cat(glue("{i} Vaccination as X of DPT:\n"), sep = "\n")
+  cat(eval(as.name(paste0(tolower(i), "_times_DPT"))), sep = "\n")
+  
+  # check that DPT value is not NA:
+  waitifnot(!is.na(mean(c(j[income_and_region == i & disease == "Diphtheria" & yr == 2]$coverage, 
+                          j[income_and_region == i & disease == "Diphtheria" & yr == 0]$coverage))))
+  
+  
+  # check that all DPT values equal one another (D=T=P)
+  alice <- mean(c(j[income_and_region == i &
+                      disease == "Diphtheria" & yr == 0]$coverage,
+                  j[income_and_region == i &
+                      disease == "Diphtheria" & yr == 2]$coverage))
+  bob <- mean(c(j[income_and_region == i &
+                    disease == "Tetanus" & yr == 0]$coverage,
+                j[income_and_region == i &
+                    disease == "Tetanus" & yr == 2]$coverage))
+  carol <- mean(c(j[income_and_region == i &
+                      disease == "Pertussis" & yr == 0]$coverage,
+                  j[income_and_region == i &
+                      disease == "Pertussis" & yr == 2]$coverage))
+  waitifnot(alice == bob)
+  waitifnot(bob == carol)
+  alice <- NULL; bob <- NULL; carol <- NULL
+  
+}
+
+var2oleaf(lic_above_hepb)	; lic_above_hepb
+var2oleaf(lmic_above_hepb)	; lmic_above_hepb
+var2oleaf(umic_above_hepb)	; umic_above_hepb
+var2oleaf(hic_above_hepb)	; hic_above_hepb
+
+# LOW INCOME, ETC. WITHINT SUB-SAHARAN AFRICAN COUNTRIES:
+
+setwd(input_dir)
+ssa <- as.data.table(readRDS("df_prior_to_making_df_disease_avg.RDS"))
+
+ssa[,region:=countrycode(iso3c, "iso3c", "region")]
+ssa <- ssa[income %in% c("LIC", "LMIC") & region == "Sub-Saharan Africa"]
+
+ssa_avg <- ssa[, .(coverage = weighted_mean(coverage, pop_wm, na.rm = T)),
+    by = c("year", "disease", "income")] %>% dfdt()
+
+ssa_avg[,minyr:=min(year), by = .(disease)]
+waitifnot(nrow(na.omit(ssa_avg))==nrow(ssa_avg))
+ssa_avg[,yr_adj:=year - minyr]
+
+# LIC SSA:
+
+# COVID:
+ssa_avg[disease == "covid-19" & income == "LIC" & yr_adj==1]$coverage
+
+# DPT
+mean(ssa_avg[disease == "diphtheria" & income == "LIC" & (yr_adj==2|yr_adj == 0)]$coverage)
+
+# LMIC SSA
+
+# COVID:
+ssa_avg[disease == "covid-19" & income == "LMIC" & yr_adj==1]$coverage
+
+# DPT
+mean(ssa_avg[disease == "diphtheria" & income == "LMIC" & (yr_adj==2|yr_adj == 0)]$coverage)
+
 
 # Bar: Flu Measles Covid --------------------------------------------------
 # Palache, A., Rockman, S., Taylor, B., Akcay, M., Billington, J. K., & Barbosa, P. (2021). Vaccine complacency and dose distribution inequities limit the benefits of seasonal influenza vaccination, despite a positive trend in use. Vaccine, 39(41), 6081-6087.
