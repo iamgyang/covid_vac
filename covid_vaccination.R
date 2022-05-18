@@ -1628,9 +1628,13 @@ myfile <-
   )
 df_covid <- read.csv(textConnection(myfile), header = T) %>% as.data.frame() %>% as.data.table()
 n_covid <-
-  df_covid[iso_code == "OWID_WRL"]$total_vaccinations %>% na.omit() %>% max() %>% (function(x) {
-    x
-  })/2
+  df_covid[total_vaccinations != 0][
+    total_vaccinations == max(total_vaccinations, na.rm = T) |
+    total_vaccinations == min(total_vaccinations, na.rm = T)][
+      , .(iso_code, date, total_vaccinations)][iso_code == "OWID_WRL"][
+        , .(min_date = min(date),max_date = max(date),vacc = max(total_vaccinations))][
+          , .(time_elapsed = as.numeric(as.Date(max_date) - as.Date(min_date)) / 365, vacc = vacc)][
+            , .(vacc_annual = vacc / time_elapsed)]$vacc_annual
 
 p <- data.table(
   disease = c("Measles", "Flu", "Covid-19"),
@@ -1891,6 +1895,9 @@ jx$year <- as.numeric(jx$year)
 mad$year <- as.numeric(mad$year)
 jx <- merge(jx, mad, by = c("year", "iso3c"), all.x = T)
 jx <- jx %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
+
+jx <- jx[order(iso3c,year, disease)]
+# jx[,gdppc:=nafill(gdppc,"locf"),by=c('iso3c','disease')]
 
 # graph:
 plot <- 
