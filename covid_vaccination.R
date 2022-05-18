@@ -352,8 +352,10 @@ df_covid[,vaccine:="Covid"]
 
 # GDP per capita from WEO -------------------------------------------------
 
+current_year <- lubridate::year(Sys.Date())
 # we get constant PPP GDP per capita from WEO's October 2021 release.
-weo_oct_21 <- fread("WEOOct2021all.txt")
+setwd(raw_dir)
+weo_oct_21 <- fread("WEOApr2022all.txt")
 
 weo_oct_21 <-
   weo_oct_21[`Subject Descriptor` ==
@@ -361,9 +363,9 @@ weo_oct_21 <-
                Units == "Purchasing power parity; 2017 international dollar"]
 weo_oct_21 <- as.data.frame(weo_oct_21)
 weo_oct_21 <-
-  weo_oct_21[, c("ISO", "Country", as.character(seq(1980, 2021)))]
+  weo_oct_21[, c("ISO", "Country", as.character(seq(1980, current_year)))]
 weo_oct_21 <- weo_oct_21 %>%
-  pivot_longer(., as.character(seq(1980, 2021)),
+  pivot_longer(., as.character(seq(1980, current_year)),
                names_to = "year")
 weo_oct_21$value <- as.numeric(gsub(",", "", weo_oct_21$value))
 weo_oct_21$year <- as.numeric(weo_oct_21$year)
@@ -378,7 +380,6 @@ weo_oct_21 <- weo_oct_21 %>%
 waitifnot(nrow(weo_oct_21)>0)
 
 # merge WDI and Maddison GDP PPP estimates -------------------------
-
 mad <- merge(mad, weo_oct_21,by = c('year','iso3c'), all = TRUE)
 
 # confirm we have unique iso3c years
@@ -389,13 +390,14 @@ waitifnot(nrow(distinct(mad[,.(year, iso3c)]))==nrow(mad[,.(year, iso3c)]))
 mad <- mad[order(iso3c,year)]
 mad[,weo_gdppc_gr:=weo_gdppc/shift(weo_gdppc), by = 'iso3c']
 
-for (i in seq(2015, 2021)) {
+for (i in seq(2015, current_year)) {
   mad[, gdppc.n := shift(gdppc) * weo_gdppc_gr, by = 'iso3c']
   mad[year == i & is.na(gdppc), gdppc := gdppc.n]
   mad <- as.data.table(mad)
 }
 
 waitifnot((mad[iso3c == "USA"][year == 2021]$gdppc>0)==TRUE)
+waitifnot((mad[iso3c == "USA"][year == current_year]$gdppc>0)==TRUE)
 
 mad[,(c('gdppc.n', 'weo_gdppc', 'weo_gdppc_gr')):=NULL]
 mad <- mad[order(iso3c, year)]
