@@ -18,10 +18,10 @@ rm(list = ls())
 user<-Sys.info()["user"]
 root_dir <- paste0("C:/Users/", user, "/Dropbox/CGD/Projects/covid_vaccination/")
 input_dir <- paste0(root_dir, "input")
-output_dir <- paste0(root_dir, "output")
 code_dir <- paste0(root_dir, "code")
 raw_dir <- paste0(root_dir, "raw_data")
-chat_dir <- paste0("C:/Users/user/Dropbox/CGD/Projects/refute_mestieri/input")
+
+# this is the output directory:
 overleaf_dir <- paste0("C:/Users/", user, "/Dropbox/Apps/Overleaf/Covid Rollout Historical")
 setwd(raw_dir)
 
