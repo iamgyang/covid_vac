@@ -1472,7 +1472,7 @@ for (graph_type in c("coverage")) {
           scale_y_continuous(limits = c(0, 100)) + 
           scale_x_continuous(limits = c(0, 3), breaks = 0:3)
         
-        setwd("C:/Users/user/Dropbox/CGD/Projects/covid_vaccination/press")
+        setwd(overleaf_dir)
         ggsave(
           glue(
             "line_early_covid_{i}_{income_}_{graph_type}_{k}.png"
