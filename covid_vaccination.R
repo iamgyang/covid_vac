@@ -53,7 +53,9 @@ theme_set(theme_clean() +
 
 
 # source(paste0(root_dir, "code/", "helper_functions.R"))
-source(paste0("C:/Users/", user, "/Dropbox/Coding_General/personal.functions.R"))
+setwd(code_dir)
+source("personal.functions.R")
+setwd(raw_dir)
 
 custom_title <- function(x) {
   gsub("(^|[[:space:]])([[:alpha:]])", 
