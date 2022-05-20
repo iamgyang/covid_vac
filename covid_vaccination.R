@@ -333,9 +333,6 @@ df_covid <-
   df_covid[,.(iso3c = iso_code, date, 
               cov = people_fully_vaccinated_per_hundred,
               booster = total_boosters_per_hundred)]
-              # total_boosters_per_hundred
-              # people_fully_vaccinated_per_hundred
-              # people_vaccinated_per_hundred
 df_covid$cov <- as.numeric(df_covid$cov)
 df_covid <- df_covid[!is.na(cov)|!is.na(booster)]
 waitifnot(df_covid[!is.na(booster) & is.na(cov)] %>% na.omit() %>% nrow() == 0)
@@ -387,8 +384,8 @@ mad <- merge(mad, weo_oct_21,by = c('year','iso3c'), all = TRUE)
 # confirm we have unique iso3c years
 waitifnot(nrow(distinct(mad[,.(year, iso3c)]))==nrow(mad[,.(year, iso3c)]))
 
-# Get 2019 and 2021 GDP figures by using growth from WEO figures to 
-# project forwards the Maddison GDP figures.
+# Get 2019 and 2021 GDP figures by using growth from WEO figures to project
+# forwards the Maddison GDP figures.
 mad <- mad[order(iso3c,year)]
 mad[,weo_gdppc_gr:=weo_gdppc/shift(weo_gdppc), by = 'iso3c']
 
@@ -459,7 +456,7 @@ load("post_merge.RData")
 
 # Adjustments -------------------------------------------------------------
 
-# ! We take the Yellow Fever data from 'Dryad' (Shearer et. al.'s untargeted 
+# ! We take the Yellow Fever data from 'Dryad' (Shearer et. al.'s untargeted
 # unbiased estimates of vaccination coverage), as opposed to from the WHO data,
 # since Shearer's data encompasses the WHO data.
 df <- df[!(disease=="yellow fever" & (source=="WHO/UNICEF")) | is.na(source)]
@@ -493,7 +490,7 @@ df <- merge(df, long_series, by = c("disease", 'vaccine'), all = T)
 df <- df[keep == 1]
 df[, keep := NULL]
 
-# Divide Africa 1968 data by 0.22 to get estimated childhood vaccination rate. 
+# Divide Africa 1968 data by 0.22 to get estimated childhood vaccination rate.
 # This means that we would assume that all those vaccines are going to children.
 df[notes == "denominator is total population", coverage := min(coverage/0.22, 100)]
 
@@ -501,10 +498,10 @@ df[notes == "denominator is total population", coverage := min(coverage/0.22, 10
 # for flu vaccination coverage in people above 65.
 df <- df[notes!="doses per per capita"|is.na(notes)]
 
-# Get the maximum coverage per year-disease-country. e.g. let's say we have the DTP vaccine coverage and the Pertussis
-# vaccine coverage available for Nigeria. One is at 80%, another is at 50%.
-# For all of pertussis, diptheria, and tetanus, we'd set the coverage rate to
-# be 80%.
+# Get the maximum coverage per year-disease-country. e.g. let's say we have the
+# DTP vaccine coverage and the Pertussis vaccine coverage available for Nigeria.
+# One is at 80%, another is at 50%. For all of pertussis, diptheria, and
+# tetanus, we'd set the coverage rate to be 80%.
 
 df <- df[, .(coverage = max(coverage, na.rm = T)),
          by = c(
@@ -526,9 +523,8 @@ df <- df[!is.na(disease)]
 waitifnot(all(na.omit(df$disease!="DTP-related")))
 check_dup_id(df, c("disease", "iso3c", "year"))
 
-# Check how our data coverage is -- global estimates:
-# if the vaccine summary measure is after the schedule, then set 
-# population to be 0
+# Check how our data coverage is -- global estimates: if the vaccine summary
+# measure is after the schedule, then set population to be 0
 exp_grid <- CJ(
   disease = unique(df$disease),
   iso3c = unique(who_keep_iso3c),
@@ -629,8 +625,8 @@ setwd(overleaf_dir)
 ggsave("line_coverage_plot.pdf", plot, width = 8, height = 5)
 setwd(input_dir)
 
-# Make sure that the microbe ID, licensing year, schedule year, 
-# and income is filled:
+# Make sure that the microbe ID, licensing year, schedule year, and income is
+# filled:
 df <- df %>%
   arrange(disease) %>%
   group_by(disease) %>%
@@ -654,8 +650,8 @@ df <- df %>%
 
 df[is.na(coverage), coverage := 0]
 
-# Create a table that shows the global coverage estimates.
-# First get a population that we use specifically for this purpose:
+# Create a table that shows the global coverage estimates. First get a
+# population that we use specifically for this purpose:
 df[disease == "influenza", pop_wm := pop_t_ge65]
 df[disease == "HPV", pop_wm := pop_f_le15]
 df[disease == "yellow fever", pop_wm := poptotal]
@@ -672,8 +668,8 @@ df_disease_avg <-
       ), 
      by = c("year", "disease")] %>% dfdt()
 
-# Create a table that shows the global coverage estimates by INCOME, REGION, 
-# and AFRICAN REGION too:
+# Create a table that shows the global coverage estimates by INCOME, REGION, and
+# AFRICAN REGION too:
 
 # SAVING DATAFRAME AT THIS POINT FOR RANDOM STATS
 setwd(input_dir)
@@ -937,14 +933,14 @@ prog_df[!is.na(`75`), endpoint:= `75`]
 prog_df[disease=="Smallpox", endpoint:=1980]
 
 # STOP HERE ---------------------------------------------------------------
-write_sheet(prog_df, ss = "https://docs.google.com/spreadsheets/d/1fpwpesVd74Dr5eF4zK4RIMvKwOIGlsB1xeRPFVnWPdo/edit?usp=sharing", sheet = 1)
-
+# !!!!!!
+# write_sheet(prog_df, ss = "https://docs.google.com/spreadsheets/d/1fpwpesVd74Dr5eF4zK4RIMvKwOIGlsB1xeRPFVnWPdo/edit?usp=sharing", sheet = 1)
 
 # For infections with vaccines, excluding smallpox and Covid-19, the average
 # period between microbe isolation and vaccine development was [x] years.  For
-# vaccines that have reached a given milestone, the average time between
-# vaccine development and 20 percent global coverage was [x] years, 40 percent
-# coverage was [y] years and 75% coverage [z] years.  
+# vaccines that have reached a given milestone, the average time between vaccine
+# development and 20 percent global coverage was [x] years, 40 percent coverage
+# was [y] years and 75% coverage [z] years.  
 
 mean(unlist(prog_df[disease != "Covid-19" &
     disease != "Smallpox"][, 
@@ -999,9 +995,9 @@ jx[year %in% c(2021) & disease != 'Covid-19', w_stdev := NA]
 jx[year %in% c(2021) & disease != 'Covid-19', w_stdev := NA]
 jx[year %in% c(2021) & disease != 'Covid-19', coverage := NA]
 
-# For HPV, delete 2020 data because it's so patchy:
-# As of 11-18-2021, only 44 countries that we have HPV for in 
-# 2020 (compared to 22 and 54 for 2019, respectively).
+# For HPV, delete 2020 data because it's so patchy: As of 11-18-2021, only 44
+# countries that we have HPV for in 2020 (compared to 22 and 54 for 2019,
+# respectively).
 jx[year %in% c(2020) & disease %in% c('HPV'),
    (c('coverage', 'w_stdev')) := NA]
 
@@ -1010,7 +1006,9 @@ jx$disease <- jx$disease %>%
   factor(., levels = c(setdiff(sort(unique(jx$disease)), 'Covid-19'),'Covid-19'))
 
 plot <-
-  ggplot(jx[disease %in% d2graf & income == "Global" & year <= 2021], # we're including a year restriction because COVID data for 2022 as of 1/7/2022 is pretty crappy right now
+  # we're including a year restriction because COVID data for 2022 as of
+  # 1/7/2022 is pretty crappy right now
+  ggplot(jx[disease %in% d2graf & income == "Global" & year <= 2021], 
          aes(x = year, group = disease, color = disease)) +
   geom_line(aes(y = coverage, group = disease, color = disease)) +
   geom_ribbon(
@@ -1246,19 +1244,6 @@ project_coverage <-
       horiz_lines
     
   }
-
-
-# create a function that: fits line through LIC coverage from "start" to "end" by 
-# fitting a sigmoid curve and spitting out the date
-
-
-
-
-
-
-
-
-
 
 # Line: Early stage COVID -------------------------------------------------------
 
@@ -1604,8 +1589,18 @@ mean(ssa_avg[disease == "diphtheria" & income == "LMIC" & (yr_adj==2|yr_adj == 0
 
 
 # Bar: Flu Measles Covid --------------------------------------------------
-# Palache, A., Rockman, S., Taylor, B., Akcay, M., Billington, J. K., & Barbosa, P. (2021). Vaccine complacency and dose distribution inequities limit the benefits of seasonal influenza vaccination, despite a positive trend in use. Vaccine, 39(41), 6081-6087.
-# Absolute number of seasonal influenza vaccine doses distributed - The total number of doses distributed in 2004 was approximately 262 million and this had risen to about 531 million in 2019, an overall 103% increase (Supplemental Fig. 1). However, compared to the peak number of doses distributed in 2014 of 534 million doses, the 2019 total represents a 0.3% decline. The overall growth in the number of doses distributed has largely been driven by the increase in absolute number of doses distributed in the Americas (AM) (a 154 million dose difference between 2004 and 2019).
+# Palache, A., Rockman, S., Taylor, B., Akcay, M., Billington, J. K., & Barbosa,
+# P. (2021). Vaccine complacency and dose distribution inequities limit the
+# benefits of seasonal influenza vaccination, despite a positive trend in use.
+# Vaccine, 39(41), 6081-6087. Absolute number of seasonal influenza vaccine
+# doses distributed - The total number of doses distributed in 2004 was
+# approximately 262 million and this had risen to about 531 million in 2019, an
+# overall 103% increase (Supplemental Fig. 1). However, compared to the peak
+# number of doses distributed in 2014 of 534 million doses, the 2019 total
+# represents a 0.3% decline. The overall growth in the number of doses
+# distributed has largely been driven by the increase in absolute number of
+# doses distributed in the Americas (AM) (a 154 million dose difference between
+# 2004 and 2019).
 
 j <- df_disease_avg[income == "Global" & 
                disease == "measles" & 
@@ -1713,11 +1708,11 @@ setwd(overleaf_dir)
 ggsave("bar_num_doses.pdf", plot, width = 8, height = 5)
 setwd(input_dir)
 
-
 # https://www.who.int/data/gho/indicator-metadata-registry/imr-details/4756
-# Global and regional coverage is a weighted sum of WHO/UNICEF estimates of national coverage by target population from the United Nations Population Division's World Population Prospects. The size of the target population is the national annual number of infants surviving their first year of life. 
-
-
+# Global and regional coverage is a weighted sum of WHO/UNICEF estimates of
+# national coverage by target population from the United Nations Population
+# Division's World Population Prospects. The size of the target population is
+# the national annual number of infants surviving their first year of life. 
 
 # Line: Coefficient of variation across time -----------------------
 
@@ -1747,8 +1742,9 @@ load("index_convergence.RData")
 
 # plot convergence
 plot <-
-  # we drop Flu in 2020 data sample is very small and likely is the reason for the artificial drop in coverage
-  # (see Appendix figure where we plot data availability)
+  # we drop Flu in 2020 data sample is very small and likely is the reason for
+  # the artificial drop in coverage (see Appendix figure where we plot data
+  # availability)
   ggplot(data = na.omit(fix_countries[disease!="Covid-19" & !(disease == "Influenza" & year == 2020)]), 
          aes(year, w.coef.var, 
              group = disease, color = disease)) +
@@ -1763,9 +1759,6 @@ plot <-
   guides(color = guide_legend(ncol = 2, override.aes = list(size = 3))) +
   my_custom_theme +
   scale_color_custom
-  # scale_y_log10(breaks = breaks_log(n = 10),
-  #               labels = scales::comma_format(accuracy = 0.01)) + 
-  # annotation_logticks(sides = "l")
 
 setwd(overleaf_dir)
 ggsave(
@@ -1776,8 +1769,7 @@ ggsave(
 )
 setwd(input_dir)
 
-# Between
-# 2000 and 2020, the weighted coefficient for HiB fell from {[}X{]} to
+# Between 2000 and 2020, the weighted coefficient for HiB fell from {[}X{]} to
 # {[}Y{]}. For measles it fell from {[}X{]} to {[}Y{]}. For Covid-19
 # vaccination, the coefficient of variation was {[}X{]} in {[}date{]} and
 # dropped to {[}y{]} in {[}date{]}. {[}GY: how do we have two values for
@@ -1824,8 +1816,8 @@ jx <- jx %>%
   ) %>%
   dfdt()
 
-# make sure that the min year has more than 20 countries in it,
-# and that we've achieved 20% vaccine coverage.
+# make sure that the min year has more than 20 countries in it, and that we've
+# achieved 20% vaccine coverage.
 jx[coverage!=0 ,n:=.N, by = .(disease, year)]
 a <- unique(na.omit(jx[,.(disease, year, n)]))
 a <- a[n>10]
@@ -1843,8 +1835,9 @@ jx[,minyr:=min(year), by = .(disease)]
 jx[,maxyr:=max(year), by = .(disease)]
 jx <- jx[year == minyr|year==maxyr]
 
-# and remove any countries in the end year where it is 0.
-# do this by taking the difference between the end year and the start year, and seeing if that EQUALs negative the start year value.
+# and remove any countries in the end year where it is 0. do this by taking the
+# difference between the end year and the start year, and seeing if that EQUALs
+# negative the start year value.
 jx <- jx[order(disease, iso3c, year)]
 jx[,fdiff:=coverage - shift(coverage,n=1,type = "lead"),by = .(disease, iso3c)]
 jx <- jx[fdiff!=coverage | is.na(fdiff) | is.na(coverage)]
@@ -1899,7 +1892,6 @@ jx <- merge(jx, mad, by = c("year", "iso3c"), all.x = T)
 jx <- jx %>% as.data.frame() %>% dfcoalesce.all() %>% dfdt()
 
 jx <- jx[order(iso3c,year, disease)]
-# jx[,gdppc:=nafill(gdppc,"locf"),by=c('iso3c','disease')]
 
 # graph:
 plot <- 
@@ -2070,4 +2062,3 @@ ggsave(paste0("dot_time_to_75_cov.pdf"),
        width = 8,
        height = 8)
 setwd(input_dir)
-
